@@ -1,0 +1,67 @@
+
+Setup Instructions for agentic_infra_agent
+=========================================
+
+These steps will configure your environment and run the infrastructure agent on your VM.  You'll need your SSH private key (``agentic-ai-vm-new-key.pem``) and your OpenAI/Azure credentials.
+
+1. **Prepare your environment variables**
+
+   Use the provided ``env_template.env`` file as a starting point for your configuration.  It includes placeholders for:
+
+   - ``OPENAI_API_TYPE`` – set to ``azure`` if using Azure OpenAI; otherwise ``openai``.
+   - ``OPENAI_API_KEY`` – your API key (not provided here).
+   - ``OPENAI_API_BASE`` – the base URL of your OpenAI resource (e.g. ``https://<your-resource>.openai.azure.com/``).
+   - ``OPENAI_DEPLOYMENT_NAME`` – name of your model deployment.
+   - ``PALOALTO_HOST``, ``PALOALTO_USERNAME``, ``PALOALTO_PASSWORD`` – connection details for your Palo Alto firewall.
+
+   Edit the template in VS Code and save it as ``.env`` either on your local machine or directly on the VM.  Do **not** share these secrets.
+
+2. **Copy the agent script and environment file to your VM**
+
+   Assuming ``agentic_infra_agent.py`` and your ``.env`` file reside in the same local directory, use ``scp`` to transfer them to your VM.  Replace the IP address with your VM’s public IP (e.g. ``108.143.81.25``) and adjust the path to your private key:
+
+   ```bash
+   scp -i "C:\Users\raafat.soliman\OneDrive - Accenture\Desktop\agentic-ai-vm-new-key.pem" agentic_infra_agent.py .env azureuser@<vm-ip-address>:/home/azureuser/
+   ```
+
+3. **SSH into your VM**
+
+   Connect to your VM using the private key:
+
+   ```bash
+   ssh -i "C:\Users\raafat.soliman\OneDrive - Accenture\Desktop\agentic-ai-vm-new-key.pem" azureuser@<vm-ip-address>
+   ```
+
+4. **Load environment variables**
+
+   On the VM, navigate to your home directory and load the environment variables from ``.env``:
+
+   ```bash
+   cd ~
+   export $(grep -v '^#' .env | xargs)
+   ```
+
+   Alternatively, you can add these `export` commands directly to your shell profile or run them manually.
+
+5. **Run the agent**
+
+   Once the environment variables are set, run the agent script:
+
+   ```bash
+   python3 ~/agentic_infra_agent.py
+   ```
+
+   The agent will start a simple chat interface in your terminal.  You can ask it to perform tasks like:
+
+   - ``terraform_apply /home/azureuser/my-terraform-project`` – to run `terraform init` and `terraform apply` in a directory.
+   - ``az_cli az group list`` – to list resource groups via the Azure CLI.
+   - ``paloalto_create_address_object "InternalServer" "192.168.1.10" "FirewallAddressGroup""`` – to create a new address object on your Palo Alto firewall.
+
+   Replace parameters with values appropriate for your environment.
+
+6. **Maintain security**
+
+   - Keep your private key (``agentic-ai-vm-new-key.pem``) and API keys confidential.
+   - Do not commit sensitive information to version control.
+   - Regularly rotate credentials and update your ``.env`` file accordingly.
+

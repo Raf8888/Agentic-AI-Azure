@@ -1,0 +1,1 @@
+ssh -i "C:\Users\raafat.soliman\OneDrive - Accenture\Desktop\agentic-ai-vm-new-key.pem" azureuser@108.143.81.25
