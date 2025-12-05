@@ -19,10 +19,15 @@ FGT_LAN_IP="10.100.1.4"
 log() { echo "[INFO] $*"; }
 
 log "Ensuring spoke VNet $SPOKE_VNET and subnet $SPOKE_SUBNET"
-az network vnet create --only-show-errors \
-  -g "$RESOURCE_GROUP" -n "$SPOKE_VNET" \
-  --address-prefixes "$SPOKE_PREFIX" \
-  --subnet-name "$SPOKE_SUBNET" --subnet-prefixes "$SPOKE_SUBNET_PREFIX" >/dev/null
+if az network vnet show --only-show-errors -g "$RESOURCE_GROUP" -n "$SPOKE_VNET" >/dev/null 2>&1; then
+  log "Spoke VNet $SPOKE_VNET already exists"
+else
+  az network vnet create --only-show-errors \
+    -g "$RESOURCE_GROUP" -n "$SPOKE_VNET" \
+    --location "$AZURE_REGION" \
+    --address-prefixes "$SPOKE_PREFIX" \
+    --subnet-name "$SPOKE_SUBNET" --subnet-prefixes "$SPOKE_SUBNET_PREFIX" >/dev/null
+fi
 
 log "Ensuring workload NIC $WORKLOAD_NIC"
 if ! az network nic show --only-show-errors -g "$RESOURCE_GROUP" -n "$WORKLOAD_NIC" >/dev/null 2>&1; then
@@ -70,7 +75,11 @@ else
 fi
 
 log "Ensuring route table $ROUTE_TABLE with default route via FortiGate"
-az network route-table create --only-show-errors -g "$RESOURCE_GROUP" -n "$ROUTE_TABLE" --location "$AZURE_REGION" >/dev/null
+if az network route-table show --only-show-errors -g "$RESOURCE_GROUP" -n "$ROUTE_TABLE" >/dev/null 2>&1; then
+  log "Route table $ROUTE_TABLE already exists"
+else
+  az network route-table create --only-show-errors -g "$RESOURCE_GROUP" -n "$ROUTE_TABLE" --location "$AZURE_REGION" >/dev/null
+fi
 
 if az network route-table route show --only-show-errors -g "$RESOURCE_GROUP" --route-table-name "$ROUTE_TABLE" -n "$ROUTE_NAME" >/dev/null 2>&1; then
   log "Route $ROUTE_NAME already exists"

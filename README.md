@@ -40,7 +40,7 @@ All scripts are non-interactive (`set -euo pipefail`) and intended to be rerunna
 
 ## Running the workflow
 1. Add the `AZURE_CREDENTIALS` secret as above.
-2. Push to `main` or choose **Actions -> azure-fgt-lab.yml -> Run workflow** for manual dispatch.
+2. Push to `master` or choose **Actions -> azure-fgt-lab.yml -> Run workflow** for manual dispatch.
 3. Jobs run in order: `deploy_hub_fgt` (hub + FortiGate), `deploy_spoke_routing` (spoke + routing), `generate_and_validate` (config snippet + validation + artifact upload).
 4. Download the `fortigate-config` artifact to apply the FortiGate CLI snippet after the run succeeds.
 
