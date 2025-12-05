@@ -2,7 +2,7 @@ name: Azure FortiGate Hub-Spoke Lab
 
 on:
   push:
-    branches: [ main ]
+    branches: [ master ]
   workflow_dispatch:
 
 jobs:
