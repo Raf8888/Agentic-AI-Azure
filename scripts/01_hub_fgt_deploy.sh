@@ -1,96 +1,112 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-AZURE_REGION="${AZURE_REGION:-westeurope}"
-RESOURCE_GROUP="rg-fgt-hubspoke"
-HUB_VNET="vnet-hub-fgt"
-HUB_VNET_PREFIX="10.100.0.0/16"
-WAN_SUBNET="snet-fw-wan"
-WAN_PREFIX="10.100.0.0/24"
-LAN_SUBNET="snet-fw-lan"
-LAN_PREFIX="10.100.1.0/24"
-FGT_LAN_IP="10.100.1.4"
-PUBLIC_IP="pip-fgt-hub"
-DNS_LABEL="${DNS_LABEL:-acn-fgt-hub-westeurope}"
-WAN_NIC="nic-fgt-wan"
-LAN_NIC="nic-fgt-lan"
-FGT_VM="vm-fgt-hub"
-FGT_ADMIN="fortiadmin"
-FGT_ADMIN_PW="Forti@12345Lab!"
-VM_SIZE="${VM_SIZE:-Standard_F4s_v2}"
-FGT_IMAGE="${FGT_IMAGE:-fortinet:fortinet_fortigate-vm_v5:fortinet_fg-vm:latest}"
-PLAN_PUBLISHER="fortinet"
-PLAN_PRODUCT="fortinet_fortigate-vm_v5"
-PLAN_NAME="fortinet_fg-vm"
+#############################################
+# Azure FortiGate Hub Deployment Script
+# Fully idempotent — safe to rerun
+#############################################
 
-log() { echo "[INFO] $*"; }
+# ==== CONFIGURATION ====
+RG_NAME="rg-fgt-hubspoke"
+LOCATION="westeurope"
 
-ensure_nic() {
-  local nic_name=$1
-  if az network nic show --only-show-errors -g "$RESOURCE_GROUP" -n "$nic_name" >/dev/null 2>&1; then
-    log "NIC $nic_name already exists"
-    return 0
-  fi
-  log "Creating NIC $nic_name"
-  az network nic create --only-show-errors -g "$RESOURCE_GROUP" -n "$nic_name" "$@" >/dev/null
-}
+HUB_VNET_NAME="vnet-hub-fgt"
+HUB_VNET_CIDR="10.0.0.0/24"
 
-log "Ensuring resource group $RESOURCE_GROUP in $AZURE_REGION"
-az group create --only-show-errors -n "$RESOURCE_GROUP" -l "$AZURE_REGION" >/dev/null
+SUBNET_FW_WAN="subnet-fw-wan"
+SUBNET_FW_WAN_CIDR="10.0.0.0/28"
 
-log "Ensuring hub VNet $HUB_VNET with subnets"
-az network vnet create --only-show-errors \
-  -g "$RESOURCE_GROUP" -n "$HUB_VNET" \
-  --address-prefixes "$HUB_VNET_PREFIX" \
-  --subnet-name "$WAN_SUBNET" --subnet-prefixes "$WAN_PREFIX" >/dev/null
-az network vnet subnet create --only-show-errors \
-  -g "$RESOURCE_GROUP" --vnet-name "$HUB_VNET" \
-  -n "$LAN_SUBNET" --address-prefix "$LAN_PREFIX" >/dev/null
+SUBNET_FW_LAN="subnet-fw-lan"
+SUBNET_FW_LAN_CIDR="10.0.0.16/28"
 
-log "Ensuring public IP $PUBLIC_IP with DNS label $DNS_LABEL"
-if ! az network public-ip show --only-show-errors -g "$RESOURCE_GROUP" -n "$PUBLIC_IP" >/dev/null 2>&1; then
-  az network public-ip create --only-show-errors \
-    -g "$RESOURCE_GROUP" -n "$PUBLIC_IP" \
-    --sku Standard --allocation-method Static \
-    --dns-name "$DNS_LABEL" >/dev/null
-else
-  log "Public IP $PUBLIC_IP already exists"
+PIP_NAME="pip-fgt-hub"
+FGT_VM_NAME="fgt-hub"
+
+FGT_LAN_IP="10.0.0.20"
+
+IMAGE_PUBLISHER="fortinet"
+IMAGE_OFFER="fortinet_fortigate-vm_v5"
+IMAGE_SKU="fortinet_fg-vm_payg_2023"
+IMAGE_VERSION="latest"
+
+#############################################
+echo "[INFO] Ensuring resource group $RG_NAME"
+az group create --name "$RG_NAME" --location "$LOCATION" --only-show-errors
+
+#############################################
+echo "[INFO] Ensuring VNet $HUB_VNET_NAME with subnets"
+if ! az network vnet show --resource-group "$RG_NAME" --name "$HUB_VNET_NAME" >/dev/null 2>&1; then
+  az network vnet create \
+    --resource-group "$RG_NAME" \
+    --name "$HUB_VNET_NAME" \
+    --location "$LOCATION" \
+    --address-prefix "$HUB_VNET_CIDR" \
+    --subnet-name "$SUBNET_FW_WAN" \
+    --subnet-prefix "$SUBNET_FW_WAN_CIDR" \
+    --only-show-errors
 fi
 
-log "Ensuring WAN NIC $WAN_NIC"
-ensure_nic "$WAN_NIC" --vnet-name "$HUB_VNET" --subnet "$WAN_SUBNET" --public-ip-address "$PUBLIC_IP"
-az network nic update --only-show-errors -g "$RESOURCE_GROUP" -n "$WAN_NIC" --set enableIPForwarding=true >/dev/null
-
-log "Ensuring LAN NIC $LAN_NIC"
-ensure_nic "$LAN_NIC" --vnet-name "$HUB_VNET" --subnet "$LAN_SUBNET" --private-ip-address "$FGT_LAN_IP"
-az network nic update --only-show-errors -g "$RESOURCE_GROUP" -n "$LAN_NIC" --set enableIPForwarding=true >/dev/null
-
-log "Accepting FortiGate marketplace terms (idempotent)"
-az vm image terms accept --only-show-errors --publisher "$PLAN_PUBLISHER" --offer "$PLAN_PRODUCT" --plan "$PLAN_NAME" >/dev/null
-
-log "Ensuring FortiGate VM $FGT_VM"
-if az vm show --only-show-errors -g "$RESOURCE_GROUP" -n "$FGT_VM" >/dev/null 2>&1; then
-  log "VM $FGT_VM already exists"
-else
-  az vm create --only-show-errors \
-    -g "$RESOURCE_GROUP" -n "$FGT_VM" \
-    --nics "$WAN_NIC" "$LAN_NIC" \
-    --size "$VM_SIZE" \
-    --image "$FGT_IMAGE" \
-    --admin-username "$FGT_ADMIN" --admin-password "$FGT_ADMIN_PW" \
-    --authentication-type password \
-    --license-type BYOL \
-    --plan publisher="$PLAN_PUBLISHER" product="$PLAN_PRODUCT" name="$PLAN_NAME" >/dev/null
+# Ensure LAN subnet exists
+if ! az network vnet subnet show --resource-group "$RG_NAME" --vnet-name "$HUB_VNET_NAME" --name "$SUBNET_FW_LAN" >/dev/null 2>&1; then
+  az network vnet subnet create \
+    --resource-group "$RG_NAME" \
+    --vnet-name "$HUB_VNET_NAME" \
+    --name "$SUBNET_FW_LAN" \
+    --address-prefix "$SUBNET_FW_LAN_CIDR" \
+    --only-show-errors
 fi
 
-PUB_IP=$(az network public-ip show --only-show-errors -g "$RESOURCE_GROUP" -n "$PUBLIC_IP" --query "ipAddress" -o tsv)
-FQDN=$(az network public-ip show --only-show-errors -g "$RESOURCE_GROUP" -n "$PUBLIC_IP" --query "dnsSettings.fqdn" -o tsv)
+#############################################
+echo "[INFO] Ensuring public IP $PIP_NAME"
+az network public-ip create \
+  --resource-group "$RG_NAME" \
+  --name "$PIP_NAME" \
+  --version IPv4 \
+  --sku Standard \
+  --allocation-method Static \
+  --only-show-errors
 
-log "Deployment summary"
-echo "Resource Group: $RESOURCE_GROUP"
-echo "Hub VNet: $HUB_VNET ($HUB_VNET_PREFIX)"
-echo "Subnets: $WAN_SUBNET=$WAN_PREFIX, $LAN_SUBNET=$LAN_PREFIX"
-echo "FortiGate VM: $FGT_VM"
-echo "Public IP: ${PUB_IP:-N/A}"
-echo "FQDN: ${FQDN:-N/A}"
-echo "FortiGate LAN IP (port2): $FGT_LAN_IP"
+#############################################
+echo "[INFO] Ensuring WAN NIC nic-fgt-wan"
+if ! az network nic show --resource-group "$RG_NAME" --name "nic-fgt-wan" >/dev/null 2>&1; then
+  az network nic create \
+    --resource-group "$RG_NAME" \
+    --name "nic-fgt-wan" \
+    --vnet-name "$HUB_VNET_NAME" \
+    --subnet "$SUBNET_FW_WAN" \
+    --public-ip-address "$PIP_NAME" \
+    --ip-forwarding true \
+    --only-show-errors
+fi
+
+#############################################
+echo "[INFO] Ensuring LAN NIC nic-fgt-lan"
+if ! az network nic show --resource-group "$RG_NAME" --name "nic-fgt-lan" >/dev/null 2>&1; then
+  az network nic create \
+    --resource-group "$RG_NAME" \
+    --name "nic-fgt-lan" \
+    --vnet-name "$HUB_VNET_NAME" \
+    --subnet "$SUBNET_FW_LAN" \
+    --private-ip-address "$FGT_LAN_IP" \
+    --ip-forwarding true \
+    --only-show-errors
+fi
+
+#############################################
+echo "[INFO] Deploying FortiGate VM if not exists"
+if ! az vm show --resource-group "$RG_NAME" --name "$FGT_VM_NAME" >/dev/null 2>&1; then
+  az vm create \
+    --resource-group "$RG_NAME" \
+    --name "$FGT_VM_NAME" \
+    --location "$LOCATION" \
+    --size "Standard_F4s_v2" \
+    --public-ip-address "" \
+    --nics "nic-fgt-wan" "nic-fgt-lan" \
+    --image "$IMAGE_PUBLISHER:$IMAGE_OFFER:$IMAGE_SKU:$IMAGE_VERSION" \
+    --admin-username "adminuser" \
+    --generate-ssh-keys \
+    --only-show-errors
+fi
+
+#############################################
+echo "[SUCCESS] Hub FortiGate deployment complete."
