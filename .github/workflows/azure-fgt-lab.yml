@@ -17,6 +17,8 @@ jobs:
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: Accept Fortinet marketplace terms
+        run: az vm image terms accept --publisher fortinet --offer fortinet_fortigate-vm_v5 --plan fortinet_fg-vm_payg_2023
       - name: Deploy hub and FortiGate
         shell: bash
         run: ./scripts/01_hub_fgt_deploy.sh
