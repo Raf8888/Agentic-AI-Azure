@@ -122,17 +122,31 @@ def try_builtin_fixes(logs: str) -> bool:
     Returns True if any file was changed.
     """
     changed = False
+    applied = []
     # Always apply safe static fixes if patterns exist in the repo (even if logs download fails).
-    changed |= fix_common_ps_uint32_hex_overflow()
+    if fix_common_ps_uint32_hex_overflow():
+        changed = True
+        applied.append("ps_uint32_hex_overflow")
+    if fix_common_ps_nsg_wildcard_expansion():
+        changed = True
+        applied.append("ps_nsg_wildcard_expansion")
     if "The property 'addressPrefixes' cannot be found on this object" in logs or "addressPrefixes cannot be found" in logs:
-        changed |= fix_common_ps_address_prefixes()
+        if fix_common_ps_address_prefixes():
+            changed = True
+            applied.append("ps_address_prefixes")
     if (
         "Cannot convert value \"-1\" to type \"System.UInt32\"" in logs
         or "Invalid CIDR format" in logs
         or "Invalid prefix length in CIDR" in logs
         or "Convert-CidrToRange" in logs
     ):
-        changed |= fix_common_ps_cidr_validation()
+        if fix_common_ps_cidr_validation():
+            changed = True
+            applied.append("ps_cidr_validation")
+    if applied:
+        print(f"[SELF_HEAL] Built-in fixes applied: {', '.join(applied)}")
+    else:
+        print("[SELF_HEAL] No built-in fixes applied")
     return changed
 
 
@@ -152,6 +166,46 @@ def fix_common_ps_uint32_hex_overflow() -> bool:
     if text != original:
         path.write_text(text)
         print("[BUILTIN_FIX] Replaced [uint32]0xFFFFFFFF with [uint32]::MaxValue in tools/common.ps1")
+        return True
+    return False
+
+
+def fix_common_ps_nsg_wildcard_expansion() -> bool:
+    """
+    In pwsh, wildcard-like values can be expanded when splatting to native commands.
+    This repo previously passed '*' into az for NSG rules; that can expand to repo paths
+    like 'config' and break NSG rule creation with invalid port ranges.
+
+    This fix ensures Ensure-NsgRule does not pass '*' to az for port/address defaults.
+    """
+    path = REPO_ROOT / "tools" / "common.ps1"
+    if not path.exists():
+        return False
+
+    text = path.read_text()
+    original = text
+
+    # If the hardened version is already present, do nothing.
+    if "Avoid using '*'" in text and "0-65535" in text and "--source-port-ranges" in text:
+        return False
+
+    # Minimal safe replacements for legacy Ensure-NsgRule implementations.
+    text = re.sub(
+        r"('--source-port-ranges'\s*,\s*)'\*'",
+        r"\g<1>'0-65535'",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"('--destination-address-prefixes'\s*,\s*)'\*'",
+        r"\g<1>'0.0.0.0/0'",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    if text != original:
+        path.write_text(text)
+        print("[BUILTIN_FIX] Hardened tools/common.ps1 to avoid '*' in az NSG args")
         return True
     return False
 
@@ -373,7 +427,7 @@ def maybe_commit_and_push(branch: str):
     status = run(["git", "status", "--porcelain"], capture_output=True).stdout.strip()
     if not status:
         print("[INFO] No changes to commit")
-        return
+        return None
     run(["git", "config", "user.name", "agentic-bot"])
     run(["git", "config", "user.email", "agentic-bot@local"])
     run(["git", "add", "."])
@@ -382,12 +436,50 @@ def maybe_commit_and_push(branch: str):
         print(commit.stdout.strip())
     if commit.stderr:
         print(commit.stderr.strip())
+    sha = run(["git", "rev-parse", "HEAD"], capture_output=True).stdout.strip()
+    print(f"[SELF_HEAL] Committed: {sha}")
     push = run(["git", "push", "origin", branch], capture_output=True)
     if push.stdout:
         print(push.stdout.strip())
     if push.stderr:
         print(push.stderr.strip())
     print("[INFO] Changes pushed")
+    return sha
+
+
+def find_recent_run_url(repo: str, branch: str, sha: str, token: str) -> Optional[str]:
+    url = f"https://api.github.com/repos/{repo}/actions/runs"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    params = {"branch": branch, "per_page": 10}
+    resp = requests.get(url, headers=headers, params=params, timeout=30)
+    if resp.status_code != 200:
+        return None
+    data = resp.json() or {}
+    for run_item in data.get("workflow_runs", []):
+        if run_item.get("head_sha") == sha:
+            return run_item.get("html_url")
+    return None
+
+
+def dispatch_workflow(repo: str, branch: str, token: str) -> bool:
+    workflow_file = "azure-fgt-lab.yml"
+    url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow_file}/dispatches"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    payload = {"ref": branch}
+    resp = requests.post(url, headers=headers, json=payload, timeout=30)
+    if resp.status_code in (201, 204):
+        print(f"[SELF_HEAL] Dispatched workflow {workflow_file} on {branch}")
+        return True
+    print(f"[SELF_HEAL_WARN] Workflow dispatch failed: {resp.status_code} {resp.text[:500]}")
+    return False
 
 
 def main():
@@ -408,7 +500,14 @@ def main():
 
     # Try deterministic local fixes first (no OpenAI required)
     if try_builtin_fixes(logs_text):
-        maybe_commit_and_push(branch)
+        sha = maybe_commit_and_push(branch)
+        if sha:
+            # Best-effort: ensure a retry run exists; dispatch if push trigger doesn't create one.
+            run_url = find_recent_run_url(repo, branch, sha, repo_token)
+            if run_url:
+                print(f"[SELF_HEAL] New run detected: {run_url}")
+            else:
+                dispatch_workflow(repo, branch, repo_token)
         return
 
     if not openai_key:
@@ -422,7 +521,13 @@ def main():
         sys.stderr.write("[SELF_HEAL_WARN] OpenAI response contained no FILE blocks; no changes applied.\n")
         return
     apply_patches(patches)
-    maybe_commit_and_push(branch)
+    sha = maybe_commit_and_push(branch)
+    if sha:
+        run_url = find_recent_run_url(repo, branch, sha, repo_token)
+        if run_url:
+            print(f"[SELF_HEAL] New run detected: {run_url}")
+        else:
+            dispatch_workflow(repo, branch, repo_token)
 
 
 if __name__ == "__main__":

@@ -285,6 +285,14 @@ function Ensure-NsgRule {
     [Parameter(Mandatory)] [string] $Source,
     [Parameter(Mandatory)] [string] $DestPorts
   )
+  # Avoid using '*' in native-command arguments (pwsh may expand wildcards to repo paths like 'config').
+  $sourcePorts = '0-65535'
+  $destinationAddress = '0.0.0.0/0'
+  $destinationPorts = $DestPorts
+  if ([string]::IsNullOrWhiteSpace($destinationPorts) -or $destinationPorts -eq '*') {
+    $destinationPorts = '0-65535'
+  }
+
   $baseArgs = @(
     'network','nsg','rule','create',
     '-g',$ResourceGroup,
@@ -295,9 +303,9 @@ function Ensure-NsgRule {
     '--access',$Access,
     '--protocol',$Protocol,
     '--source-address-prefixes',$Source,
-    '--source-port-ranges','*',
-    '--destination-address-prefixes','*',
-    '--destination-port-ranges',$DestPorts,
+    '--source-port-ranges',$sourcePorts,
+    '--destination-address-prefixes',$destinationAddress,
+    '--destination-port-ranges',$destinationPorts,
     '-o','none'
   )
   try {
