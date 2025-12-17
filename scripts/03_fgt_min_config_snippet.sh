@@ -4,7 +4,11 @@ set -euo pipefail
 RG_NAME="rg-fgt-hubspoke"
 PIP_NAME="pip-fgt-hub"
 
-FGT_LAN_IP="10.100.1.4"
+FGT_LAN_IP=$(az network nic show -g "$RG_NAME" -n "nic-fgt-lan" --query "ipConfigurations[0].privateIpAddress" -o tsv 2>/dev/null || true)
+if [ -z "$FGT_LAN_IP" ]; then
+  echo "[ERROR] Unable to discover FortiGate LAN IP from nic-fgt-lan" >&2
+  exit 1
+fi
 FGT_LAN_MASK="255.255.255.0"
 WAN_GATEWAY_IP="10.100.0.1"
 SPOKE_SUBNET="10.101.1.0/24"

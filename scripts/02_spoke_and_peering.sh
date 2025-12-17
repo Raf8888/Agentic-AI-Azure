@@ -12,7 +12,7 @@ SPOKE_SUBNET_NAME="snet-spoke-app"
 SPOKE_SUBNET_CIDR="10.101.1.0/24"
 
 ROUTE_TABLE_NAME="rt-spoke-via-fgt"
-FGT_LAN_IP="10.100.1.4"
+FGT_LAN_IP=""
 
 WORKLOAD_VM_NAME="vm-spoke-app-01"
 WORKLOAD_ADMIN_USER="labadmin"
@@ -82,6 +82,11 @@ if ! az network vnet peering show -g "$RG_NAME" --vnet-name "$SPOKE_VNET_NAME" -
 fi
 
 echo "[05] UDR via FortiGate"
+FGT_LAN_IP=$(az network nic show -g "$RG_NAME" -n "nic-fgt-lan" --query "ipConfigurations[0].privateIpAddress" -o tsv 2>/dev/null || true)
+if [ -z "$FGT_LAN_IP" ]; then
+  echo "[ERROR] Unable to discover FortiGate LAN IP from nic-fgt-lan" >&2
+  exit 1
+fi
 if ! az network route-table show -g "$RG_NAME" -n "$ROUTE_TABLE_NAME" >/dev/null 2>&1; then
   az network route-table create \
     -g "$RG_NAME" \

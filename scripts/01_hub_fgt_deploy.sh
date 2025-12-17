@@ -73,11 +73,8 @@ ensure_hub_vnet_and_subnets() {
       --subnet-name "$WAN_SUBNET_DESIRED" --subnet-prefixes "$WAN_SUBNET_CIDR" \
       --only-show-errors >/dev/null
   fi
-  if ! az network vnet subnet show -g "$RG" --vnet-name "$HUB_VNET" -n "$LAN_SUBNET_DESIRED" --only-show-errors >/dev/null 2>&1; then
-    az_with_retry az network vnet subnet create \
-      -g "$RG" --vnet-name "$HUB_VNET" -n "$LAN_SUBNET_DESIRED" \
-      --address-prefixes "$LAN_SUBNET_CIDR" --only-show-errors >/dev/null
-  fi
+  # Do not create the LAN subnet here because the default range frequently overlaps with legacy subnets.
+  # LAN subnet creation is handled in discover_or_default_subnets() with overlap-safe selection.
 }
 
 ensure_pip_and_dns() {
@@ -110,6 +107,65 @@ ensure_pip_and_dns() {
   fi
 }
 
+get_vnet_subnet_prefixes_json() {
+  # Returns JSON array of objects: [{"p":"10.0.0.0/24","ps":["..."]}, ...]
+  az network vnet subnet list -g "$RG" --vnet-name "$HUB_VNET" \
+    --query "[].{p:addressPrefix,ps:addressPrefixes}" -o json 2>/dev/null || echo "[]"
+}
+
+cidr_overlaps_existing() {
+  local candidate="$1"
+  local prefixes_json="$2"
+  python3 - "$candidate" "$prefixes_json" <<'PY'
+import json, sys, ipaddress
+candidate = sys.argv[1]
+prefixes_json = sys.argv[2]
+try:
+    data = json.loads(prefixes_json or "[]")
+except Exception:
+    data = []
+existing = []
+for item in data:
+    p = item.get("p")
+    if p:
+        existing.append(p)
+    for pp in (item.get("ps") or []):
+        if pp:
+            existing.append(pp)
+cand = ipaddress.ip_network(candidate, strict=False)
+for e in existing:
+    try:
+        net = ipaddress.ip_network(e, strict=False)
+    except Exception:
+        continue
+    if cand.overlaps(net):
+        sys.exit(0)
+sys.exit(1)
+PY
+}
+
+ip_in_cidr() {
+  local ip="$1"
+  local cidr="$2"
+  python3 - "$ip" "$cidr" <<'PY'
+import sys, ipaddress
+ip = ipaddress.ip_address(sys.argv[1])
+net = ipaddress.ip_network(sys.argv[2], strict=False)
+sys.exit(0 if ip in net else 1)
+PY
+}
+
+ip_at_offset_in_cidr() {
+  local cidr="$1"
+  local offset="$2"
+  python3 - "$cidr" "$offset" <<'PY'
+import sys, ipaddress
+net = ipaddress.ip_network(sys.argv[1], strict=False)
+off = int(sys.argv[2])
+print(str(net.network_address + off))
+PY
+}
+
 discover_or_default_subnets() {
   WAN_SUBNET="$WAN_SUBNET_DESIRED"
   LAN_SUBNET="$LAN_SUBNET_DESIRED"
@@ -119,15 +175,53 @@ discover_or_default_subnets() {
   fi
   if az network nic show -g "$RG" -n "$LAN_NIC" --only-show-errors >/dev/null 2>&1; then
     LAN_SUBNET=$(az network nic show -g "$RG" -n "$LAN_NIC" --query "ipConfigurations[0].subnet.id" -o tsv | awk -F/ '{print $NF}')
+    FGT_LAN_IP=$(az network nic show -g "$RG" -n "$LAN_NIC" --query "ipConfigurations[0].privateIpAddress" -o tsv 2>/dev/null || echo "$FGT_LAN_IP")
   fi
 
   if ! az network vnet subnet show -g "$RG" --vnet-name "$HUB_VNET" -n "$WAN_SUBNET" --only-show-errors >/dev/null 2>&1; then
     log "Creating WAN subnet $WAN_SUBNET"
     az_with_retry az network vnet subnet create -g "$RG" --vnet-name "$HUB_VNET" -n "$WAN_SUBNET" --address-prefixes "$WAN_SUBNET_CIDR" --only-show-errors >/dev/null
   fi
-  if ! az network vnet subnet show -g "$RG" --vnet-name "$HUB_VNET" -n "$LAN_SUBNET" --only-show-errors >/dev/null 2>&1; then
-    log "Creating LAN subnet $LAN_SUBNET"
-    az_with_retry az network vnet subnet create -g "$RG" --vnet-name "$HUB_VNET" -n "$LAN_SUBNET" --address-prefixes "$LAN_SUBNET_CIDR" --only-show-errors >/dev/null
+
+  # LAN subnet: overlap-safe selection + reuse existing subnet with the same prefix (legacy deployments)
+  local existing_json
+  existing_json="$(get_vnet_subnet_prefixes_json)"
+
+  # If the desired LAN subnet exists, keep its prefix (do NOT attempt to change)
+  if az network vnet subnet show -g "$RG" --vnet-name "$HUB_VNET" -n "$LAN_SUBNET" --only-show-errors >/dev/null 2>&1; then
+    LAN_SUBNET_CIDR="$(az network vnet subnet show -g "$RG" --vnet-name "$HUB_VNET" -n "$LAN_SUBNET" --query "addressPrefix" -o tsv 2>/dev/null || echo "$LAN_SUBNET_CIDR")"
+  else
+    # Reuse any existing subnet that already uses the desired prefix (common when a legacy subnet exists with a different name)
+    local reuse_name
+    reuse_name="$(az network vnet subnet list -g "$RG" --vnet-name "$HUB_VNET" --query "[?addressPrefix=='$LAN_SUBNET_CIDR'].name | [0]" -o tsv 2>/dev/null || true)"
+    if [[ -n "$reuse_name" && "$reuse_name" != "null" ]]; then
+      warn "LAN prefix $LAN_SUBNET_CIDR already used by subnet '$reuse_name' - reusing it instead of creating '$LAN_SUBNET'"
+      LAN_SUBNET="$reuse_name"
+    else
+      # Find a deterministic next available /24 starting at LAN_SUBNET_CIDR
+      local start_ip third base0 base1
+      start_ip="${LAN_SUBNET_CIDR%%/*}"
+      IFS='.' read -r base0 base1 third _ <<<"$start_ip"
+      local candidate
+      for ((t=third; t<=250; t++)); do
+        candidate="${base0}.${base1}.${t}.0/24"
+        if cidr_overlaps_existing "$candidate" "$existing_json"; then
+          continue
+        fi
+        LAN_SUBNET_CIDR="$candidate"
+        log "Creating LAN subnet $LAN_SUBNET with non-overlapping prefix $LAN_SUBNET_CIDR"
+        az_with_retry az network vnet subnet create -g "$RG" --vnet-name "$HUB_VNET" -n "$LAN_SUBNET" --address-prefixes "$LAN_SUBNET_CIDR" --only-show-errors >/dev/null
+        break
+      done
+    fi
+  fi
+
+  # Ensure FortiGate LAN IP is inside the selected LAN subnet; default to +4 if not
+  if ! ip_in_cidr "$FGT_LAN_IP" "$LAN_SUBNET_CIDR"; then
+    local new_ip
+    new_ip="$(ip_at_offset_in_cidr "$LAN_SUBNET_CIDR" 4)"
+    warn "FGT_LAN_IP=$FGT_LAN_IP is not in LAN subnet $LAN_SUBNET_CIDR; switching to $new_ip"
+    FGT_LAN_IP="$new_ip"
   fi
 }
 

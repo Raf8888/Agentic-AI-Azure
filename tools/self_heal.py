@@ -63,19 +63,25 @@ def download_logs(repo: str, run_id: str, token: str) -> None:
     if resp.status_code in (301, 302, 303, 307, 308) and resp.headers.get("Location"):
         zip_url = resp.headers["Location"]
         zip_resp = requests.get(zip_url, timeout=60)
-        if zip_resp.status_code == 200 and "zip" in (zip_resp.headers.get("Content-Type") or ""):
-            with zipfile.ZipFile(io.BytesIO(zip_resp.content)) as zf:
-                zf.extractall(LOG_DIR)
-            return
+        if zip_resp.status_code == 200:
+            try:
+                with zipfile.ZipFile(io.BytesIO(zip_resp.content)) as zf:
+                    zf.extractall(LOG_DIR)
+                return
+            except Exception:
+                pass
         (LOG_DIR / "logs_download_failed.txt").write_text(
             f"Redirected logs download failed: {zip_resp.status_code}\n{zip_resp.text[:2000]}\n"
         )
         return
 
-    if resp.status_code == 200 and "zip" in (resp.headers.get("Content-Type") or ""):
-        with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
-            zf.extractall(LOG_DIR)
-        return
+    if resp.status_code == 200:
+        try:
+            with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+                zf.extractall(LOG_DIR)
+            return
+        except Exception:
+            pass
 
     (LOG_DIR / "logs_unavailable.txt").write_text(
         f"Logs endpoint did not return zip. status={resp.status_code}\n{resp.text[:2000]}\n"
@@ -118,6 +124,8 @@ def build_prompt(logs: str) -> str:
     ]
     content_parts = [
         "You are an autonomous CI fixer. Analyze logs and propose file replacements.",
+        "Primary goal: make the workflow pass end-to-end with idempotent Azure CLI scripts.",
+        "If you see subnet overlap errors (e.g., snet-fgt-lan 10.100.1.0/24 overlaps), DO NOT hardcode a single new /24; implement deterministic non-overlapping subnet selection or reuse an existing subnet using Azure CLI queries.",
         "Return ONLY patches in this exact format (no prose):",
         "FILE: relative/path",
         "<full new content>",
@@ -163,7 +171,9 @@ def call_openai(api_key: str, prompt: str) -> str:
 
 def parse_patches(content: str):
     patches = []
-    lines = content.splitlines()
+    # Tolerate markdown fences / leading chatter; only trust explicit FILE blocks.
+    cleaned = content.replace("```", "")
+    lines = cleaned.splitlines()
     i = 0
     while i < len(lines):
         line = lines[i].strip()
@@ -178,8 +188,6 @@ def parse_patches(content: str):
                 raise RuntimeError(f"Missing terminator for file {path}")
             patches.append((path, "\n".join(buf).rstrip("\n") + "\n"))
         i += 1
-    if not patches:
-        raise RuntimeError("No patches parsed from OpenAI response")
     return patches
 
 
@@ -195,6 +203,10 @@ def apply_patches(patches):
 
 
 def maybe_commit_and_push(branch: str):
+    # Never commit downloaded logs
+    if LOG_DIR.exists():
+        shutil.rmtree(LOG_DIR)
+
     status = run(["git", "status", "--porcelain"], capture_output=True).stdout.strip()
     if not status:
         print("[INFO] No changes to commit")
@@ -219,6 +231,9 @@ def main():
     prompt = build_prompt(logs_text)
     response = call_openai(openai_key, prompt)
     patches = parse_patches(response)
+    if not patches:
+        sys.stderr.write("[SELF_HEAL_WARN] OpenAI response contained no FILE blocks; no changes applied.\n")
+        return
     apply_patches(patches)
     maybe_commit_and_push(branch)
 
