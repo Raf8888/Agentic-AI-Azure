@@ -106,12 +106,13 @@ function Convert-CidrToRange {
   $ipInt = Convert-IPv4ToUInt32 -Ip $ip
   $mask = [uint32]0
   if ($prefix -eq 0) {
-    $mask = 0
+    $mask = [uint32]0
   } else {
-    $mask = [uint32]([uint32]0xFFFFFFFF -shl (32 - $prefix))
+    $mask = [uint32]([uint32]::MaxValue -shl (32 - $prefix))
   }
-  $network = $ipInt -band $mask
-  $broadcast = $network + ([uint32]0xFFFFFFFF -bxor $mask)
+  $network = [uint32]($ipInt -band $mask)
+  $wildcard = [uint32]([uint32]::MaxValue -bxor $mask)
+  $broadcast = [uint32]($network + $wildcard)
   [pscustomobject]@{ Start = $network; End = $broadcast; Cidr = $Cidr }
 }
 

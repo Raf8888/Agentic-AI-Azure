@@ -16,6 +16,7 @@ FILE: relative/path
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -121,6 +122,8 @@ def try_builtin_fixes(logs: str) -> bool:
     Returns True if any file was changed.
     """
     changed = False
+    # Always apply safe static fixes if patterns exist in the repo (even if logs download fails).
+    changed |= fix_common_ps_uint32_hex_overflow()
     if "The property 'addressPrefixes' cannot be found on this object" in logs or "addressPrefixes cannot be found" in logs:
         changed |= fix_common_ps_address_prefixes()
     if (
@@ -131,6 +134,26 @@ def try_builtin_fixes(logs: str) -> bool:
     ):
         changed |= fix_common_ps_cidr_validation()
     return changed
+
+
+def fix_common_ps_uint32_hex_overflow() -> bool:
+    """
+    Fix PowerShell overflow: in pwsh, 0xFFFFFFFF is an Int32 -1; casting [uint32]0xFFFFFFFF throws.
+    Replace any occurrences of [uint32]0xFFFFFFFF with [uint32]::MaxValue.
+    """
+    path = REPO_ROOT / "tools" / "common.ps1"
+    if not path.exists():
+        return False
+
+    text = path.read_text()
+    original = text
+    text = re.sub(r"\[uint32\]\s*0xFFFFFFFF", "[uint32]::MaxValue", text, flags=re.IGNORECASE)
+
+    if text != original:
+        path.write_text(text)
+        print("[BUILTIN_FIX] Replaced [uint32]0xFFFFFFFF with [uint32]::MaxValue in tools/common.ps1")
+        return True
+    return False
 
 
 def fix_common_ps_address_prefixes() -> bool:
