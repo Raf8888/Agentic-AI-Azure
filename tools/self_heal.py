@@ -33,8 +33,7 @@ MAX_LOG_CHARS = 100_000
 def env_required(name: str) -> str:
     val = os.getenv(name)
     if not val:
-        sys.stderr.write(f"[ERROR] Missing required environment variable: {name}\n")
-        sys.exit(1)
+        raise ValueError(f"Missing required environment variable: {name}")
     return val
 
 
@@ -49,22 +48,38 @@ def run(cmd, check=True, capture_output=False, env=None):
 
 
 def download_logs(repo: str, run_id: str, token: str) -> None:
-    LOG_DIR.exists() and shutil.rmtree(LOG_DIR)
+    if LOG_DIR.exists():
+        shutil.rmtree(LOG_DIR)
     LOG_DIR.mkdir(parents=True, exist_ok=True)
 
     url = f"https://api.github.com/repos/{repo}/actions/runs/{run_id}/logs"
     headers = {
         "Authorization": f"Bearer {token}",
-        "Accept": "application/zip",
+        "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    resp = requests.get(url, headers=headers, timeout=60)
-    if resp.status_code != 200:
-        sys.stderr.write(f"[ERROR] Failed to download logs ({resp.status_code}): {resp.text}\n")
-        sys.exit(1)
 
-    with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
-        zf.extractall(LOG_DIR)
+    resp = requests.get(url, headers=headers, timeout=60, allow_redirects=False)
+    if resp.status_code in (301, 302, 303, 307, 308) and resp.headers.get("Location"):
+        zip_url = resp.headers["Location"]
+        zip_resp = requests.get(zip_url, timeout=60)
+        if zip_resp.status_code == 200 and "zip" in (zip_resp.headers.get("Content-Type") or ""):
+            with zipfile.ZipFile(io.BytesIO(zip_resp.content)) as zf:
+                zf.extractall(LOG_DIR)
+            return
+        (LOG_DIR / "logs_download_failed.txt").write_text(
+            f"Redirected logs download failed: {zip_resp.status_code}\n{zip_resp.text[:2000]}\n"
+        )
+        return
+
+    if resp.status_code == 200 and "zip" in (resp.headers.get("Content-Type") or ""):
+        with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+            zf.extractall(LOG_DIR)
+        return
+
+    (LOG_DIR / "logs_unavailable.txt").write_text(
+        f"Logs endpoint did not return zip. status={resp.status_code}\n{resp.text[:2000]}\n"
+    )
 
 
 def collect_logs_text() -> str:
@@ -92,7 +107,7 @@ def build_prompt(logs: str) -> str:
     files_to_include = [
         ".github/workflows/azure-fgt-lab.yml",
         "scripts/01_hub_fgt_deploy.sh",
-        "scripts/02_spoke_and_peering.sh",
+        "scripts/02_spoke_routing.sh",
         "scripts/03_fgt_min_config_snippet.sh",
         "scripts/04_validate_env.sh",
     ]
@@ -133,14 +148,12 @@ def call_openai(api_key: str, prompt: str) -> str:
     }
     resp = requests.post(url, headers=headers, json=payload, timeout=60)
     if resp.status_code != 200:
-        sys.stderr.write(f"[ERROR] OpenAI API failed ({resp.status_code}): {resp.text}\n")
-        sys.exit(1)
+        raise RuntimeError(f"OpenAI API failed ({resp.status_code}): {resp.text}")
     data = resp.json()
     try:
         return data["choices"][0]["message"]["content"]
     except Exception as exc:
-        sys.stderr.write(f"[ERROR] Unexpected OpenAI response structure: {exc}\n{json.dumps(data, indent=2)}\n")
-        sys.exit(1)
+        raise RuntimeError(f"Unexpected OpenAI response structure: {exc}\n{json.dumps(data, indent=2)}")
 
 
 def parse_patches(content: str):
@@ -157,13 +170,11 @@ def parse_patches(content: str):
                 buf.append(lines[i])
                 i += 1
             if i == len(lines):
-                sys.stderr.write(f"[ERROR] Missing terminator for file {path}\n")
-                sys.exit(1)
+                raise RuntimeError(f"Missing terminator for file {path}")
             patches.append((path, "\n".join(buf).rstrip("\n") + "\n"))
         i += 1
     if not patches:
-        sys.stderr.write("[ERROR] No patches parsed from OpenAI response\n")
-        sys.exit(1)
+        raise RuntimeError("No patches parsed from OpenAI response")
     return patches
 
 
@@ -208,4 +219,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as exc:
+        sys.stderr.write(f"[SELF_HEAL_WARN] {exc}\n")
+    sys.exit(0)
