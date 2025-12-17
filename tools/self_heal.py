@@ -21,6 +21,7 @@ import subprocess
 import sys
 import zipfile
 from pathlib import Path
+from typing import Optional
 
 import requests
 
@@ -35,6 +36,11 @@ def env_required(name: str) -> str:
     if not val:
         raise ValueError(f"Missing required environment variable: {name}")
     return val
+
+
+def env_optional(name: str) -> Optional[str]:
+    val = os.getenv(name)
+    return val if val else None
 
 
 def run(cmd, check=True, capture_output=False, env=None):
@@ -107,6 +113,72 @@ def read_optional_file(rel_path: str) -> str:
     if path.exists():
         return path.read_text()
     return ""
+
+
+def try_builtin_fixes(logs: str) -> bool:
+    """
+    Apply small deterministic fixes without OpenAI when we recognize common failures.
+    Returns True if any file was changed.
+    """
+    changed = False
+    if "The property 'addressPrefixes' cannot be found on this object" in logs or "addressPrefixes cannot be found" in logs:
+        changed |= fix_common_ps_address_prefixes()
+    return changed
+
+
+def fix_common_ps_address_prefixes() -> bool:
+    """
+    Fix StrictMode failures when Azure CLI JSON doesn't include addressPrefixes.
+    Converts direct property access to guarded access via Get-SubnetAddressPrefixes helper.
+    """
+    path = REPO_ROOT / "tools" / "common.ps1"
+    if not path.exists():
+        return False
+
+    text = path.read_text()
+    original = text
+
+    helper = r"""function Get-SubnetAddressPrefixes {
+  param([Parameter(Mandatory)] $SubnetObj)
+
+  $prefixes = @()
+  if ($null -eq $SubnetObj) { return @() }
+
+  if ($null -ne $SubnetObj.PSObject.Properties['addressPrefix']) {
+    $prefixes += @($SubnetObj.addressPrefix)
+  }
+  if ($null -ne $SubnetObj.PSObject.Properties['addressPrefixes']) {
+    $prefixes += @($SubnetObj.addressPrefixes)
+  }
+
+  return @(
+    $prefixes |
+      Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+      ForEach-Object { $_.ToString().Trim() }
+  )
+}
+"""
+
+    if "function Get-SubnetAddressPrefixes" not in text:
+        marker = "function Test-CidrOverlap {"
+        idx = text.find(marker)
+        if idx != -1:
+            text = text[:idx] + helper + "\n" + text[idx:]
+
+    text = text.replace(
+        "Prefixes = @($_.addressPrefix) + @($_.addressPrefixes)",
+        "Prefixes = (Get-SubnetAddressPrefixes -SubnetObj $_)",
+    )
+    text = text.replace(
+        "$existingPrefixes = @($existing.addressPrefix) + @($existing.addressPrefixes)",
+        "$existingPrefixes = Get-SubnetAddressPrefixes -SubnetObj $existing",
+    )
+
+    if text != original:
+        path.write_text(text)
+        print("[BUILTIN_FIX] Patched tools/common.ps1 for addressPrefixes StrictMode")
+        return True
+    return False
 
 
 def build_prompt(logs: str) -> str:
@@ -223,11 +295,27 @@ def main():
     repo = env_required("GITHUB_REPOSITORY")
     run_id = env_required("GITHUB_RUN_ID")
     branch = env_required("GITHUB_REF_NAME")
-    openai_key = env_required("OPENAI_API_KEY")
-    repo_token = env_required("REPO_WRITE_TOKEN")
+    openai_key = env_optional("OPENAI_API_KEY")
+    repo_token = env_optional("REPO_WRITE_TOKEN")
+
+    print(f"[SELF_HEAL] repo={repo} run_id={run_id} branch={branch}")
+
+    if not repo_token:
+        print("[SELF_HEAL] Missing REPO_WRITE_TOKEN; cannot download logs or push fixes.")
+        return
 
     download_logs(repo, run_id, repo_token)
     logs_text = collect_logs_text()
+
+    # Try deterministic local fixes first (no OpenAI required)
+    if try_builtin_fixes(logs_text):
+        maybe_commit_and_push(branch)
+        return
+
+    if not openai_key:
+        print("[SELF_HEAL] Missing OPENAI_API_KEY; no OpenAI-based fixes will be attempted.")
+        return
+
     prompt = build_prompt(logs_text)
     response = call_openai(openai_key, prompt)
     patches = parse_patches(response)

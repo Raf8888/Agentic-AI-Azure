@@ -107,6 +107,26 @@ function Convert-UInt32ToIPv4 {
   return ([System.Net.IPAddress]::new($bytes)).ToString()
 }
 
+function Get-SubnetAddressPrefixes {
+  param([Parameter(Mandatory)] $SubnetObj)
+
+  $prefixes = @()
+  if ($null -eq $SubnetObj) { return @() }
+
+  if ($null -ne $SubnetObj.PSObject.Properties['addressPrefix']) {
+    $prefixes += @($SubnetObj.addressPrefix)
+  }
+  if ($null -ne $SubnetObj.PSObject.Properties['addressPrefixes']) {
+    $prefixes += @($SubnetObj.addressPrefixes)
+  }
+
+  return @(
+    $prefixes |
+      Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+      ForEach-Object { $_.ToString().Trim() }
+  )
+}
+
 function Test-CidrOverlap {
   param(
     [Parameter(Mandatory)] [string] $CidrA,
@@ -146,7 +166,7 @@ function Get-HubSubnets {
   return @($subnets | ForEach-Object {
     [pscustomobject]@{
       Name = $_.name
-      Prefixes = @($_.addressPrefix) + @($_.addressPrefixes)
+      Prefixes = (Get-SubnetAddressPrefixes -SubnetObj $_)
     }
   })
 }
@@ -177,7 +197,7 @@ function Ensure-SubnetExact {
   } catch { $existing = $null }
 
   if ($null -ne $existing) {
-    $existingPrefixes = @($existing.addressPrefix) + @($existing.addressPrefixes)
+    $existingPrefixes = Get-SubnetAddressPrefixes -SubnetObj $existing
     if ($existingPrefixes -notcontains $Prefix) {
       throw "Subnet $SubnetName exists but prefix mismatch. Expected=$Prefix Actual=$($existingPrefixes -join ',')"
     }

@@ -79,8 +79,8 @@ function Get-SubnetInfoFromNic {
   if ([string]::IsNullOrWhiteSpace($subnetId)) { return $null }
 
   $subnet = Invoke-AzCli -Args @('network','vnet','subnet','show','--ids',$subnetId,'-o','json') -Json
-  $prefixes = @($subnet.addressPrefix) + @($subnet.addressPrefixes)
-  $prefix = ($prefixes | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1)
+  $prefixes = Get-SubnetAddressPrefixes -SubnetObj $subnet
+  $prefix = ($prefixes | Select-Object -First 1)
   if ([string]::IsNullOrWhiteSpace($prefix)) { throw "Subnet for NIC $NicName has empty prefix" }
   return [pscustomobject]@{ Name = $subnet.name; Prefix = $prefix; Id = $subnetId }
 }
@@ -88,7 +88,7 @@ function Get-SubnetInfoFromNic {
 # If desired WAN subnet exists, it must match the desired prefix
 try {
   $desiredWanSubnet = Invoke-AzCli -Args @('network','vnet','subnet','show','-g',$rg,'--vnet-name',$hubVnet,'-n',$wanSubnetDesiredName,'-o','json') -Json
-  $desiredWanPrefixes = @($desiredWanSubnet.addressPrefix) + @($desiredWanSubnet.addressPrefixes)
+  $desiredWanPrefixes = Get-SubnetAddressPrefixes -SubnetObj $desiredWanSubnet
   if ($desiredWanPrefixes -notcontains $wanSubnetDesiredPrefix) {
     throw "WAN subnet $wanSubnetDesiredName exists but prefix mismatch. Expected=$wanSubnetDesiredPrefix Actual=$($desiredWanPrefixes -join ',')"
   }
@@ -130,8 +130,8 @@ if ($null -ne $lanSubnetFromNic) {
 
   if ($null -ne $existingLanByName) {
     $lanSubnetUsedName = $lanSubnetName
-    $lanPrefixes = @($existingLanByName.addressPrefix) + @($existingLanByName.addressPrefixes)
-    $lanSubnetPrefix = ($lanPrefixes | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1)
+    $lanPrefixes = Get-SubnetAddressPrefixes -SubnetObj $existingLanByName
+    $lanSubnetPrefix = ($lanPrefixes | Select-Object -First 1)
     if ([string]::IsNullOrWhiteSpace($lanSubnetPrefix)) { throw "LAN subnet $lanSubnetName exists but prefix is empty" }
   } else {
     $startPrefixSubnet = Find-SubnetByPrefix -Subnets $existingSubnets -Prefix $lanStart
