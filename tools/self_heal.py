@@ -30,6 +30,7 @@ import requests
 REPO_ROOT = Path(__file__).resolve().parent.parent
 LOG_DIR = REPO_ROOT / "gh_run_logs"
 MAX_LOG_CHARS = 100_000
+WORKFLOW_FILE = "azure-fgt-lab.yml"
 
 
 def env_required(name: str) -> str:
@@ -447,8 +448,8 @@ def maybe_commit_and_push(branch: str):
     return sha
 
 
-def find_recent_run_url(repo: str, branch: str, sha: str, token: str) -> Optional[str]:
-    url = f"https://api.github.com/repos/{repo}/actions/runs"
+def find_recent_run(repo: str, branch: str, sha: str, token: str) -> Optional[dict]:
+    url = f"https://api.github.com/repos/{repo}/actions/workflows/{WORKFLOW_FILE}/runs"
     headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github+json",
@@ -461,13 +462,12 @@ def find_recent_run_url(repo: str, branch: str, sha: str, token: str) -> Optiona
     data = resp.json() or {}
     for run_item in data.get("workflow_runs", []):
         if run_item.get("head_sha") == sha:
-            return run_item.get("html_url")
+            return run_item
     return None
 
 
 def dispatch_workflow(repo: str, branch: str, token: str) -> bool:
-    workflow_file = "azure-fgt-lab.yml"
-    url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow_file}/dispatches"
+    url = f"https://api.github.com/repos/{repo}/actions/workflows/{WORKFLOW_FILE}/dispatches"
     headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github+json",
@@ -476,10 +476,45 @@ def dispatch_workflow(repo: str, branch: str, token: str) -> bool:
     payload = {"ref": branch}
     resp = requests.post(url, headers=headers, json=payload, timeout=30)
     if resp.status_code in (201, 204):
-        print(f"[SELF_HEAL] Dispatched workflow {workflow_file} on {branch}")
+        print(f"[SELF_HEAL] Dispatched workflow {WORKFLOW_FILE} on {branch}")
         return True
     print(f"[SELF_HEAL_WARN] Workflow dispatch failed: {resp.status_code} {resp.text[:500]}")
     return False
+
+
+def wait_for_run_url(repo: str, branch: str, sha: str, token: str, timeout_seconds: int = 120) -> Optional[str]:
+    """
+    Wait for a workflow run to appear for the given commit SHA (best-effort).
+    """
+    for _ in range(max(1, timeout_seconds // 5)):
+        run_item = find_recent_run(repo, branch, sha, token)
+        if run_item and run_item.get("html_url"):
+            return run_item["html_url"]
+        try:
+            import time
+
+            time.sleep(5)
+        except Exception:
+            break
+    return None
+
+
+def ensure_rerun(repo: str, branch: str, sha: str, token: str) -> None:
+    """
+    Ensure a new workflow run is kicked off for the pushed commit (best-effort).
+    """
+    url = wait_for_run_url(repo, branch, sha, token, timeout_seconds=60)
+    if url:
+        print(f"[SELF_HEAL] New run detected: {url}")
+        return
+
+    # Some tokens (e.g. GITHUB_TOKEN) won't trigger push workflows; dispatch as fallback.
+    if dispatch_workflow(repo, branch, token):
+        url = wait_for_run_url(repo, branch, sha, token, timeout_seconds=90)
+        if url:
+            print(f"[SELF_HEAL] New run detected after dispatch: {url}")
+            return
+    print("[SELF_HEAL_WARN] Could not confirm a new run was started (push/dispatch may be restricted).")
 
 
 def main():
@@ -502,12 +537,7 @@ def main():
     if try_builtin_fixes(logs_text):
         sha = maybe_commit_and_push(branch)
         if sha:
-            # Best-effort: ensure a retry run exists; dispatch if push trigger doesn't create one.
-            run_url = find_recent_run_url(repo, branch, sha, repo_token)
-            if run_url:
-                print(f"[SELF_HEAL] New run detected: {run_url}")
-            else:
-                dispatch_workflow(repo, branch, repo_token)
+            ensure_rerun(repo, branch, sha, repo_token)
         return
 
     if not openai_key:
@@ -518,16 +548,18 @@ def main():
     response = call_openai(openai_key, prompt)
     patches = parse_patches(response)
     if not patches:
-        sys.stderr.write("[SELF_HEAL_WARN] OpenAI response contained no FILE blocks; no changes applied.\n")
-        return
+        # Retry once with a stricter instruction, because models sometimes add prose.
+        sys.stderr.write("[SELF_HEAL_WARN] OpenAI response contained no FILE blocks; retrying once.\n")
+        prompt2 = prompt + "\n\nYour last response was invalid. Return ONLY FILE blocks in the required format."
+        response2 = call_openai(openai_key, prompt2)
+        patches = parse_patches(response2)
+        if not patches:
+            sys.stderr.write("[SELF_HEAL_WARN] OpenAI retry still contained no FILE blocks; no changes applied.\n")
+            return
     apply_patches(patches)
     sha = maybe_commit_and_push(branch)
     if sha:
-        run_url = find_recent_run_url(repo, branch, sha, repo_token)
-        if run_url:
-            print(f"[SELF_HEAL] New run detected: {run_url}")
-        else:
-            dispatch_workflow(repo, branch, repo_token)
+        ensure_rerun(repo, branch, sha, repo_token)
 
 
 if __name__ == "__main__":

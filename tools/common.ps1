@@ -53,18 +53,45 @@ function Invoke-AzCli {
   $delay = $InitialDelaySeconds
   while ($true) {
     try {
-      $out = & az @Args 2>&1
-      if ($LASTEXITCODE -ne 0) {
-        throw ($out | Out-String)
+      # Use ProcessStartInfo to avoid PowerShell wildcard expansion when passing args to native commands.
+      $psi = [System.Diagnostics.ProcessStartInfo]::new()
+      $psi.FileName = 'az'
+      foreach ($a in $Args) { [void]$psi.ArgumentList.Add($a) }
+      $psi.RedirectStandardOutput = $true
+      $psi.RedirectStandardError = $true
+      $psi.UseShellExecute = $false
+      $psi.CreateNoWindow = $true
+
+      $proc = [System.Diagnostics.Process]::new()
+      $proc.StartInfo = $psi
+      [void]$proc.Start()
+      $stdout = $proc.StandardOutput.ReadToEnd()
+      $stderr = $proc.StandardError.ReadToEnd()
+      $proc.WaitForExit()
+
+      if ($proc.ExitCode -ne 0) {
+        throw (($stdout + "`n" + $stderr).Trim())
       }
       if ($Json) {
-        if ([string]::IsNullOrWhiteSpace($out)) { return $null }
-        return ($out | Out-String | ConvertFrom-Json)
+        $jsonText = ($stdout | Out-String).Trim()
+        if ([string]::IsNullOrWhiteSpace($jsonText)) { return $null }
+        try {
+          return ($jsonText | ConvertFrom-Json)
+        } catch {
+          $msg = "Failed to parse az JSON output. Command: az $($Args -join ' ')"
+          if (-not [string]::IsNullOrWhiteSpace($stderr)) { $msg += "`nSTDERR:`n$stderr" }
+          throw $msg
+        }
       }
-      return ($out | Out-String).Trim()
+      $out = (($stdout + "`n" + $stderr) | Out-String).Trim()
+      return $out
     } catch {
       if ($attempt -ge $Retries) { throw }
-      Write-Host "[WARN] az failed (attempt $attempt/$Retries): $($Args -join ' ')" -ForegroundColor Yellow
+      $errLine = ($_.Exception.Message | Out-String).Trim().Split("`n")[0]
+      Write-Host "[WARN] az failed (attempt $attempt/$Retries): az $($Args -join ' ')" -ForegroundColor Yellow
+      if (-not [string]::IsNullOrWhiteSpace($errLine)) {
+        Write-Host "       $errLine" -ForegroundColor Yellow
+      }
       Start-Sleep -Seconds $delay
       $attempt++
       $delay = [Math]::Min($delay * 2, 60)
@@ -285,7 +312,7 @@ function Ensure-NsgRule {
     [Parameter(Mandatory)] [string] $Source,
     [Parameter(Mandatory)] [string] $DestPorts
   )
-  # Avoid using '*' in native-command arguments (pwsh may expand wildcards to repo paths like 'config').
+  # Avoid using '*' for port defaults; '*' is safe with Invoke-AzCli, but numeric ranges are more robust for validation.
   $sourcePorts = '0-65535'
   $destinationAddress = '0.0.0.0/0'
   $destinationPorts = $DestPorts
@@ -293,12 +320,56 @@ function Ensure-NsgRule {
     $destinationPorts = '0-65535'
   }
 
+  $existing = $null
+  $ruleExists = $false
+  try {
+    $existing = Invoke-AzCli -Args @('network','nsg','rule','show','-g',$ResourceGroup,'--nsg-name',$NsgName,'-n',$RuleName,'-o','json') -Json
+    $ruleExists = $true
+  } catch {
+    $existing = $null
+    $ruleExists = $false
+  }
+
+  # Priority must be unique per NSG+Direction. If the rule already exists, keep its priority to stay stable.
+  $effectivePriority = $Priority
+  if ($ruleExists -and $null -ne $existing -and $null -ne $existing.PSObject.Properties['priority']) {
+    $effectivePriority = [int]$existing.priority
+  }
+
+  if (-not $ruleExists) {
+    $usedPriorities = @()
+    try {
+      $q = "[?direction=='{0}'].priority" -f $Direction
+      $used = Invoke-AzCli -Args @('network','nsg','rule','list','-g',$ResourceGroup,'--nsg-name',$NsgName,'--query',$q,'-o','tsv')
+      if (-not [string]::IsNullOrWhiteSpace($used)) {
+        $usedPriorities = @(
+          ($used -split "\s+") |
+            Where-Object { $_ -match '^\d+$' } |
+            ForEach-Object { [int]$_ }
+        )
+      }
+    } catch {
+      $usedPriorities = @()
+    }
+
+    $candidate = $Priority
+    if ($candidate -lt 100) { $candidate = 100 }
+    while ($usedPriorities -contains $candidate) { $candidate += 10 }
+    if ($candidate -gt 4096) {
+      throw "No available NSG rule priority found starting at $Priority for $NsgName/$Direction"
+    }
+    if ($candidate -ne $Priority) {
+      Write-Host "[WARN] NSG rule priority $Priority already used in $NsgName ($Direction). Using $candidate for $RuleName." -ForegroundColor Yellow
+    }
+    $effectivePriority = $candidate
+  }
+
   $baseArgs = @(
-    'network','nsg','rule','create',
+    'network','nsg','rule',($(if ($ruleExists) { 'update' } else { 'create' })),
     '-g',$ResourceGroup,
     '--nsg-name',$NsgName,
     '-n',$RuleName,
-    '--priority',"$Priority",
+    '--priority',"$effectivePriority",
     '--direction',$Direction,
     '--access',$Access,
     '--protocol',$Protocol,
@@ -308,13 +379,7 @@ function Ensure-NsgRule {
     '--destination-port-ranges',$destinationPorts,
     '-o','none'
   )
-  try {
-    Invoke-AzCli -Args @('network','nsg','rule','show','-g',$ResourceGroup,'--nsg-name',$NsgName,'-n',$RuleName,'-o','none') | Out-Null
-    $baseArgs[3] = 'update'
-    Invoke-AzCli -Args $baseArgs | Out-Null
-  } catch {
-    Invoke-AzCli -Args $baseArgs | Out-Null
-  }
+  Invoke-AzCli -Args $baseArgs | Out-Null
 }
 
 function Set-SubnetNsg {
