@@ -1,0 +1,63 @@
+{
+  "location": "westeurope",
+  "resourceGroup": "rg-fgt-hubspoke",
+  "hub": {
+    "vnetName": "vnet-hub-fgt",
+    "addressSpace": "10.100.0.0/16",
+    "wanSubnet": {
+      "name": "snet-fgt-wan",
+      "prefix": "10.100.0.0/24"
+    },
+    "lanSubnet": {
+      "name": "snet-fgt-lan",
+      "prefixStart": "10.100.1.0/24",
+      "prefixMaxOctet": 250
+    }
+  },
+  "spoke": {
+    "vnetName": "vnet-spoke-app",
+    "addressSpace": "10.101.0.0/16",
+    "subnet": {
+      "name": "snet-spoke-app",
+      "prefix": "10.101.1.0/24"
+    },
+    "vm": {
+      "name": "vm-spoke-app-01",
+      "nicName": "nic-spoke-app-01",
+      "image": "Ubuntu2204",
+      "size": "Standard_B1s",
+      "adminUsername": "labadmin",
+      "adminPassword": "LabNet!2025xY"
+    }
+  },
+  "fortigate": {
+    "vmName": "vm-fgt-hub",
+    "wanNicName": "nic-fgt-wan",
+    "lanNicName": "nic-fgt-lan",
+    "lanIp": "10.100.1.4",
+    "pipName": "pip-fgt-hub",
+    "wanNsgName": "nsg-fgt-wan",
+    "lanNsgName": "nsg-fgt-lan",
+    "imageUrn": "fortinet:fortinet_fortigate-vm_v5:fortinet_fg-vm_payg_2023:latest",
+    "plan": {
+      "publisher": "fortinet",
+      "product": "fortinet_fortigate-vm_v5",
+      "name": "fortinet_fg-vm_payg_2023"
+    }
+  },
+  "routing": {
+    "routeTableName": "rt-spoke-to-fgt",
+    "defaultRouteName": "default-via-fgt"
+  },
+  "dns": {
+    "privateZone": "internal.lab",
+    "records": {
+      "fortigateA": "fgt-hub",
+      "spokeVmA": "spoke-app"
+    }
+  },
+  "validation": {
+    "enableIcmpRule": true,
+    "enableSshRule": true
+  }
+}

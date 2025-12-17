@@ -105,9 +105,14 @@ def read_optional_file(rel_path: str) -> str:
 
 def build_prompt(logs: str) -> str:
     files_to_include = [
+        "config/lab.json",
         ".github/workflows/azure-fgt-lab.yml",
+        "tools/common.ps1",
         "scripts/01_hub_fgt_deploy.sh",
         "scripts/02_spoke_routing.sh",
+        "scripts/stage1.ps1",
+        "scripts/stage2.ps1",
+        "scripts/stage3.ps1",
         "scripts/03_fgt_min_config_snippet.sh",
         "scripts/04_validate_env.sh",
     ]
