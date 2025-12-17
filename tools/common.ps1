@@ -85,9 +85,24 @@ function Convert-IPv4ToUInt32 {
 
 function Convert-CidrToRange {
   param([Parameter(Mandatory)] [string] $Cidr)
+  if ([string]::IsNullOrWhiteSpace($Cidr)) {
+    throw "Invalid CIDR format: <empty>"
+  }
+  $Cidr = $Cidr.Trim()
+  if (-not ($Cidr -match '^\d{1,3}(\.\d{1,3}){3}/\d{1,2}$')) {
+    throw "Invalid CIDR format: $Cidr"
+  }
   $parts = $Cidr.Split('/')
   $ip = $parts[0]
   $prefix = [int]$parts[1]
+  if ($prefix -lt 0 -or $prefix -gt 32) {
+    throw "Invalid prefix length in CIDR: $Cidr"
+  }
+  try {
+    [void][System.Net.IPAddress]::Parse($ip)
+  } catch {
+    throw "Invalid IP in CIDR: $Cidr"
+  }
   $ipInt = Convert-IPv4ToUInt32 -Ip $ip
   $mask = [uint32]0
   if ($prefix -eq 0) {
@@ -214,6 +229,9 @@ function Get-NextAvailable24 {
     [Parameter(Mandatory)] [string] $StartCidr,
     [int] $MaxThirdOctet = 250
   )
+  # Validate input start CIDR (friendly errors instead of UInt32 conversion failures)
+  $null = Convert-CidrToRange -Cidr $StartCidr
+
   $startIp = $StartCidr.Split('/')[0]
   $octets = $startIp.Split('.')
   $base0 = [int]$octets[0]
@@ -226,7 +244,13 @@ function Get-NextAvailable24 {
     foreach ($s in $ExistingSubnets) {
       foreach ($p in $s.Prefixes) {
         if ([string]::IsNullOrWhiteSpace($p)) { continue }
-        if (Test-CidrOverlap -CidrA $candidate -CidrB $p) { $overlaps = $true; break }
+        try {
+          if (Test-CidrOverlap -CidrA $candidate -CidrB $p) { $overlaps = $true; break }
+        } catch {
+          Write-Host "[WARN] Skipping invalid existing subnet CIDR '$p' while selecting LAN /24: $($_.Exception.Message)" -ForegroundColor Yellow
+          $overlaps = $true
+          break
+        }
       }
       if ($overlaps) { break }
     }

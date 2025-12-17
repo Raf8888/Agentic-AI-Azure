@@ -123,6 +123,13 @@ def try_builtin_fixes(logs: str) -> bool:
     changed = False
     if "The property 'addressPrefixes' cannot be found on this object" in logs or "addressPrefixes cannot be found" in logs:
         changed |= fix_common_ps_address_prefixes()
+    if (
+        "Cannot convert value \"-1\" to type \"System.UInt32\"" in logs
+        or "Invalid CIDR format" in logs
+        or "Invalid prefix length in CIDR" in logs
+        or "Convert-CidrToRange" in logs
+    ):
+        changed |= fix_common_ps_cidr_validation()
     return changed
 
 
@@ -177,6 +184,67 @@ def fix_common_ps_address_prefixes() -> bool:
     if text != original:
         path.write_text(text)
         print("[BUILTIN_FIX] Patched tools/common.ps1 for addressPrefixes StrictMode")
+        return True
+    return False
+
+
+def fix_common_ps_cidr_validation() -> bool:
+    """
+    Add input validation to Convert-CidrToRange to avoid cryptic UInt32 conversion errors.
+    """
+    path = REPO_ROOT / "tools" / "common.ps1"
+    if not path.exists():
+        return False
+
+    text = path.read_text()
+    original = text
+
+    marker = "function Convert-CidrToRange {"
+    idx = text.find(marker)
+    if idx == -1:
+        return False
+
+    # If validation already present, skip.
+    if "Invalid CIDR format" in text or "Invalid prefix length in CIDR" in text:
+        return False
+
+    # Insert validation right after the param line.
+    lines = text.splitlines(True)
+    out = []
+    in_target = False
+    inserted = False
+    for line in lines:
+        out.append(line)
+        if line.strip() == marker.strip():
+            in_target = True
+            continue
+        if in_target and (not inserted) and line.strip().startswith("param("):
+            # After param line
+            out.append("  if ([string]::IsNullOrWhiteSpace($Cidr)) {\n")
+            out.append("    throw \"Invalid CIDR format: <empty>\"\n")
+            out.append("  }\n")
+            out.append("  $Cidr = $Cidr.Trim()\n")
+            out.append("  if (-not ($Cidr -match '^\\d{1,3}(\\.\\d{1,3}){3}/\\d{1,2}$')) {\n")
+            out.append("    throw \"Invalid CIDR format: $Cidr\"\n")
+            out.append("  }\n")
+            inserted = True
+            continue
+        if in_target and inserted and line.strip().startswith("$prefix ="):
+            # keep existing parsing; we'll validate after prefix parse
+            continue
+
+    text2 = "".join(out)
+
+    # Add prefix-range and IP validation if missing by conservative string replace.
+    if "$prefix = [int]$parts[1]" in text2 and "Invalid prefix length in CIDR" not in text2:
+        text2 = text2.replace(
+            "$prefix = [int]$parts[1]\n  $ipInt = Convert-IPv4ToUInt32 -Ip $ip\n",
+            "$prefix = [int]$parts[1]\n  if ($prefix -lt 0 -or $prefix -gt 32) {\n    throw \"Invalid prefix length in CIDR: $Cidr\"\n  }\n  try {\n    [void][System.Net.IPAddress]::Parse($ip)\n  } catch {\n    throw \"Invalid IP in CIDR: $Cidr\"\n  }\n  $ipInt = Convert-IPv4ToUInt32 -Ip $ip\n",
+        )
+
+    if text2 != original:
+        path.write_text(text2)
+        print("[BUILTIN_FIX] Patched tools/common.ps1 Convert-CidrToRange validation")
         return True
     return False
 
@@ -286,8 +354,16 @@ def maybe_commit_and_push(branch: str):
     run(["git", "config", "user.name", "agentic-bot"])
     run(["git", "config", "user.email", "agentic-bot@local"])
     run(["git", "add", "."])
-    run(["git", "commit", "-m", "Self-heal: fix pipeline"])
-    run(["git", "push", "origin", branch])
+    commit = run(["git", "commit", "-m", "Self-heal: fix pipeline"], capture_output=True)
+    if commit.stdout:
+        print(commit.stdout.strip())
+    if commit.stderr:
+        print(commit.stderr.strip())
+    push = run(["git", "push", "origin", branch], capture_output=True)
+    if push.stdout:
+        print(push.stdout.strip())
+    if push.stderr:
+        print(push.stderr.strip())
     print("[INFO] Changes pushed")
 
 
