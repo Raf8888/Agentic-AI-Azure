@@ -109,6 +109,18 @@ function Get-SubnetInfoFromNic {
   return [pscustomobject]@{ Name = $subnet.name; Prefix = $prefix; Id = $subnetId }
 }
 
+# Force-create desired WAN/LAN subnets up front (idempotent; Azure returns existing if already present)
+try {
+  Invoke-AzCli -Args @('network','vnet','subnet','create','-g',$rg,'--vnet-name',$hubVnet,'-n',$wanSubnetDesiredName,'--address-prefixes',$wanSubnetDesiredPrefix,'-o','none') | Out-Null
+} catch {
+  Write-Host "[WARN] Pre-create WAN subnet attempt: $($_.Exception.Message)" -ForegroundColor Yellow
+}
+try {
+  Invoke-AzCli -Args @('network','vnet','subnet','create','-g',$rg,'--vnet-name',$hubVnet,'-n',$lanSubnetName,'--address-prefixes',$lanStart,'-o','none') | Out-Null
+} catch {
+  Write-Host "[WARN] Pre-create LAN subnet attempt: $($_.Exception.Message)" -ForegroundColor Yellow
+}
+
 # If desired WAN subnet exists, it must match the desired prefix
 try {
   $desiredWanSubnet = Invoke-AzCli -Args @('network','vnet','subnet','show','-g',$rg,'--vnet-name',$hubVnet,'-n',$wanSubnetDesiredName,'-o','json') -Json
@@ -130,15 +142,9 @@ if ($null -ne $wanSubnetFromNic) {
   $wanSubnetName = $wanSubnetFromNic.Name
   $wanSubnetPrefix = $wanSubnetFromNic.Prefix
 } else {
-  $wanSubnet = Find-SubnetByPrefix -Subnets $existingSubnets -Prefix $wanSubnetDesiredPrefix
-  if ($null -ne $wanSubnet) {
-    $wanSubnetName = $wanSubnet.Name
-    $wanSubnetPrefix = $wanSubnetDesiredPrefix
-  } else {
-    $wanSubnetName = $wanSubnetDesiredName
-    $wanSubnetPrefix = $wanSubnetDesiredPrefix
-    $null = Ensure-SubnetExact -ResourceGroup $rg -VnetName $hubVnet -SubnetName $wanSubnetName -Prefix $wanSubnetPrefix
-  }
+  $wanSubnetName = $wanSubnetDesiredName
+  $wanSubnetPrefix = $wanSubnetDesiredPrefix
+  $null = Ensure-SubnetExact -ResourceGroup $rg -VnetName $hubVnet -SubnetName $wanSubnetName -Prefix $wanSubnetPrefix
 }
 Ensure-SubnetReady -SubnetName $wanSubnetName -Prefix $wanSubnetPrefix
 # Allow for ARM propagation before NIC creation
