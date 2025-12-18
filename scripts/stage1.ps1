@@ -68,6 +68,22 @@ try {
 Write-Host "[STAGE1] Subnets (overlap-safe)" -ForegroundColor Cyan
 $existingSubnets = Get-HubSubnets -ResourceGroup $rg -VnetName $hubVnet
 
+function Assert-SubnetExists {
+  param(
+    [Parameter(Mandatory)] [string] $SubnetName,
+    [Parameter(Mandatory)] [string] $Prefix
+  )
+  try {
+    $check = Invoke-AzCli -Args @('network','vnet','subnet','show','-g',$rg,'--vnet-name',$hubVnet,'-n',$SubnetName,'-o','json') -Json
+    $prefixes = Get-SubnetAddressPrefixes -SubnetObj $check
+    if ($prefixes -notcontains $Prefix) {
+      throw "Subnet $SubnetName exists but prefix mismatch. Expected=$Prefix Actual=$($prefixes -join ',')"
+    }
+  } catch {
+    throw "Subnet $SubnetName (prefix $Prefix) does not exist in $hubVnet/$rg or prefix mismatch. Details: $($_.Exception.Message)"
+  }
+}
+
 function Get-SubnetInfoFromNic {
   param(
     [Parameter(Mandatory)] [string] $NicName
@@ -116,6 +132,7 @@ if ($null -ne $wanSubnetFromNic) {
     $null = Ensure-SubnetExact -ResourceGroup $rg -VnetName $hubVnet -SubnetName $wanSubnetName -Prefix $wanSubnetPrefix
   }
 }
+Assert-SubnetExists -SubnetName $wanSubnetName -Prefix $wanSubnetPrefix
 
 # LAN: prefer NIC-attached subnet; else desired name if exists; else reuse exact start prefix if present; else pick next available /24
 $lanSubnetFromNic = Get-SubnetInfoFromNic -NicName $lanNic
@@ -145,6 +162,7 @@ if ($null -ne $lanSubnetFromNic) {
     }
   }
 }
+Assert-SubnetExists -SubnetName $lanSubnetUsedName -Prefix $lanSubnetPrefix
 
 function Select-FgtLanIp {
   param(
@@ -215,6 +233,14 @@ Invoke-AzCli -Args @('network','nic','ip-config','update','-g',$rg,'--nic-name',
 $fgtLanIp = Invoke-AzCli -Args @('network','nic','show','-g',$rg,'-n',$lanNic,'--query','ipConfigurations[0].privateIpAddress','-o','tsv')
 if ([string]::IsNullOrWhiteSpace($fgtLanIp)) {
   Write-Host "[WARN] FortiGate LAN IP not yet populated; retrying NIC read..." -ForegroundColor Yellow
+  Start-Sleep -Seconds 5
+  $fgtLanIp = Invoke-AzCli -Args @('network','nic','show','-g',$rg,'-n',$lanNic,'--query','ipConfigurations[0].privateIpAddress','-o','tsv')
+}
+if ([string]::IsNullOrWhiteSpace($fgtLanIp)) {
+  # If still empty, force-refresh NIC by re-reading subnet and updating IP config once more
+  Write-Host "[WARN] FortiGate LAN IP still empty; refreshing NIC IP config..." -ForegroundColor Yellow
+  $fgtLanIp = $fgtLanIpTarget
+  Invoke-AzCli -Args @('network','nic','ip-config','update','-g',$rg,'--nic-name',$lanNic,'-n',$lanIpCfg,'--private-ip-address',$fgtLanIp,'-o','none') | Out-Null
   Start-Sleep -Seconds 5
   $fgtLanIp = Invoke-AzCli -Args @('network','nic','show','-g',$rg,'-n',$lanNic,'--query','ipConfigurations[0].privateIpAddress','-o','tsv')
 }
