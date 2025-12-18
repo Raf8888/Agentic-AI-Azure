@@ -68,19 +68,23 @@ try {
 Write-Host "[STAGE1] Subnets (overlap-safe)" -ForegroundColor Cyan
 $existingSubnets = Get-HubSubnets -ResourceGroup $rg -VnetName $hubVnet
 
-function Assert-SubnetExists {
+function Ensure-SubnetReady {
   param(
     [Parameter(Mandatory)] [string] $SubnetName,
     [Parameter(Mandatory)] [string] $Prefix
   )
-  try {
-    $check = Invoke-AzCli -Args @('network','vnet','subnet','show','-g',$rg,'--vnet-name',$hubVnet,'-n',$SubnetName,'-o','json') -Json
-    $prefixes = Get-SubnetAddressPrefixes -SubnetObj $check
-    if ($prefixes -notcontains $Prefix) {
-      throw "Subnet $SubnetName exists but prefix mismatch. Expected=$Prefix Actual=$($prefixes -join ',')"
+  for ($i=1; $i -le 5; $i++) {
+    try {
+      $check = Invoke-AzCli -Args @('network','vnet','subnet','show','-g',$rg,'--vnet-name',$hubVnet,'-n',$SubnetName,'-o','json') -Json
+      $prefixes = Get-SubnetAddressPrefixes -SubnetObj $check
+      if ($prefixes -contains $Prefix) { return }
+      throw "prefix mismatch. Expected=$Prefix Actual=$($prefixes -join ',')"
+    } catch {
+      if ($i -eq 5) { throw "Subnet $SubnetName (prefix $Prefix) not ready after retries. Last error: $($_.Exception.Message)" }
+      Write-Host "[WARN] Subnet $SubnetName not ready (attempt $i/5); ensuring creation..." -ForegroundColor Yellow
+      Invoke-AzCli -Args @('network','vnet','subnet','create','-g',$rg,'--vnet-name',$hubVnet,'-n',$SubnetName,'--address-prefixes',$Prefix,'-o','none') | Out-Null
+      Start-Sleep -Seconds 5
     }
-  } catch {
-    throw "Subnet $SubnetName (prefix $Prefix) does not exist in $hubVnet/$rg or prefix mismatch. Details: $($_.Exception.Message)"
   }
 }
 
@@ -132,7 +136,7 @@ if ($null -ne $wanSubnetFromNic) {
     $null = Ensure-SubnetExact -ResourceGroup $rg -VnetName $hubVnet -SubnetName $wanSubnetName -Prefix $wanSubnetPrefix
   }
 }
-Assert-SubnetExists -SubnetName $wanSubnetName -Prefix $wanSubnetPrefix
+Ensure-SubnetReady -SubnetName $wanSubnetName -Prefix $wanSubnetPrefix
 # Allow for ARM propagation before NIC creation
 for ($i=1; $i -le 3; $i++) {
   try {
@@ -175,7 +179,7 @@ if ($null -ne $lanSubnetFromNic) {
     }
   }
 }
-Assert-SubnetExists -SubnetName $lanSubnetUsedName -Prefix $lanSubnetPrefix
+Ensure-SubnetReady -SubnetName $lanSubnetUsedName -Prefix $lanSubnetPrefix
 # Allow for ARM propagation before NIC creation
 for ($i=1; $i -le 3; $i++) {
   try {
