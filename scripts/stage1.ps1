@@ -133,6 +133,19 @@ if ($null -ne $wanSubnetFromNic) {
   }
 }
 Assert-SubnetExists -SubnetName $wanSubnetName -Prefix $wanSubnetPrefix
+# Allow for ARM propagation before NIC creation
+for ($i=1; $i -le 3; $i++) {
+  try {
+    $checkWan = Invoke-AzCli -Args @('network','vnet','subnet','show','-g',$rg,'--vnet-name',$hubVnet,'-n',$wanSubnetName,'-o','json') -Json
+    $wanPrefixes = Get-SubnetAddressPrefixes -SubnetObj $checkWan
+    if ($wanPrefixes -contains $wanSubnetPrefix) { break }
+    throw "prefix mismatch"
+  } catch {
+    if ($i -eq 3) { throw "WAN subnet $wanSubnetName (prefix $wanSubnetPrefix) not ready after retries. Last error: $($_.Exception.Message)" }
+    Write-Host "[WARN] WAN subnet not ready yet (attempt $i/3); retrying..." -ForegroundColor Yellow
+    Start-Sleep -Seconds 5
+  }
+}
 
 # LAN: prefer NIC-attached subnet; else desired name if exists; else reuse exact start prefix if present; else pick next available /24
 $lanSubnetFromNic = Get-SubnetInfoFromNic -NicName $lanNic
@@ -163,6 +176,19 @@ if ($null -ne $lanSubnetFromNic) {
   }
 }
 Assert-SubnetExists -SubnetName $lanSubnetUsedName -Prefix $lanSubnetPrefix
+# Allow for ARM propagation before NIC creation
+for ($i=1; $i -le 3; $i++) {
+  try {
+    $checkLan = Invoke-AzCli -Args @('network','vnet','subnet','show','-g',$rg,'--vnet-name',$hubVnet,'-n',$lanSubnetUsedName,'-o','json') -Json
+    $lanPrefixes = Get-SubnetAddressPrefixes -SubnetObj $checkLan
+    if ($lanPrefixes -contains $lanSubnetPrefix) { break }
+    throw "prefix mismatch"
+  } catch {
+    if ($i -eq 3) { throw "LAN subnet $lanSubnetUsedName (prefix $lanSubnetPrefix) not ready after retries. Last error: $($_.Exception.Message)" }
+    Write-Host "[WARN] LAN subnet not ready yet (attempt $i/3); retrying..." -ForegroundColor Yellow
+    Start-Sleep -Seconds 5
+  }
+}
 
 function Select-FgtLanIp {
   param(
