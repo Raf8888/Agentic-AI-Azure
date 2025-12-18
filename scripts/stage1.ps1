@@ -73,20 +73,21 @@ function Ensure-SubnetReady {
     [Parameter(Mandatory)] [string] $SubnetName,
     [Parameter(Mandatory)] [string] $Prefix
   )
-  for ($i=1; $i -le 7; $i++) {
+  for ($i=1; $i -le 5; $i++) {
     try {
       $check = Invoke-AzCli -Args @('network','vnet','subnet','show','-g',$rg,'--vnet-name',$hubVnet,'-n',$SubnetName,'-o','json') -Json
       $prefixes = Get-SubnetAddressPrefixes -SubnetObj $check
       if ($prefixes -contains $Prefix) { return }
       throw "prefix mismatch. Expected=$Prefix Actual=$($prefixes -join ',')"
     } catch {
-      if ($i -eq 7) { throw "Subnet $SubnetName (prefix $Prefix) not ready after retries. Last error: $($_.Exception.Message)" }
-      Write-Host "[WARN] Subnet $SubnetName not ready (attempt $i/7); ensuring creation..." -ForegroundColor Yellow
+      # If not found, try to create once per loop
       try {
         Invoke-AzCli -Args @('network','vnet','subnet','create','-g',$rg,'--vnet-name',$hubVnet,'-n',$SubnetName,'--address-prefixes',$Prefix,'-o','none') | Out-Null
       } catch {
         Write-Host "[WARN] subnet create attempt failed: $($_.Exception.Message)" -ForegroundColor Yellow
       }
+      if ($i -eq 5) { throw "Subnet $SubnetName (prefix $Prefix) not ready after retries. Last error: $($_.Exception.Message)" }
+      Write-Host "[WARN] Subnet $SubnetName not ready (attempt $i/5); retrying show..." -ForegroundColor Yellow
       Start-Sleep -Seconds 5
     }
   }
@@ -137,7 +138,7 @@ try {
 $wanSubnetFromNic = Get-SubnetInfoFromNic -NicName $wanNic
 if ($null -ne $wanSubnetFromNic) {
   if ($wanSubnetFromNic.Prefix -ne $wanSubnetDesiredPrefix) {
-    throw "Existing WAN NIC $wanNic is in subnet $($wanSubnetFromNic.Name) with prefix $($wanSubnetFromNic.Prefix) but expected $wanSubnetDesiredPrefix"
+    Write-Host "[WARN] WAN NIC $wanNic already attached to subnet $($wanSubnetFromNic.Name) with prefix $($wanSubnetFromNic.Prefix); overriding desired prefix." -ForegroundColor Yellow
   }
   $wanSubnetName = $wanSubnetFromNic.Name
   $wanSubnetPrefix = $wanSubnetFromNic.Prefix
@@ -166,6 +167,9 @@ $lanSubnetFromNic = Get-SubnetInfoFromNic -NicName $lanNic
 if ($null -ne $lanSubnetFromNic) {
   $lanSubnetUsedName = $lanSubnetFromNic.Name
   $lanSubnetPrefix = $lanSubnetFromNic.Prefix
+  if ($lanSubnetPrefix -ne $lanStart) {
+    Write-Host "[WARN] LAN NIC $lanNic already attached to subnet $lanSubnetUsedName with prefix $lanSubnetPrefix; overriding desired prefix." -ForegroundColor Yellow
+  }
 } else {
   $existingLanByName = $null
   try {

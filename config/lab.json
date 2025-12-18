@@ -5,11 +5,11 @@
     "vnetName": "vnet-hub-fgt",
     "addressSpace": "10.100.0.0/16",
     "wanSubnet": {
-      "name": "snet-fgt-wan",
+      "name": "snet-fw-wan",
       "prefix": "10.100.0.0/24"
     },
     "lanSubnet": {
-      "name": "snet-fgt-lan",
+      "name": "snet-fw-lan",
       "prefixStart": "10.100.1.0/24",
       "prefixMaxOctet": 250
     }
