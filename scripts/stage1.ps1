@@ -73,16 +73,20 @@ function Ensure-SubnetReady {
     [Parameter(Mandatory)] [string] $SubnetName,
     [Parameter(Mandatory)] [string] $Prefix
   )
-  for ($i=1; $i -le 5; $i++) {
+  for ($i=1; $i -le 7; $i++) {
     try {
       $check = Invoke-AzCli -Args @('network','vnet','subnet','show','-g',$rg,'--vnet-name',$hubVnet,'-n',$SubnetName,'-o','json') -Json
       $prefixes = Get-SubnetAddressPrefixes -SubnetObj $check
       if ($prefixes -contains $Prefix) { return }
       throw "prefix mismatch. Expected=$Prefix Actual=$($prefixes -join ',')"
     } catch {
-      if ($i -eq 5) { throw "Subnet $SubnetName (prefix $Prefix) not ready after retries. Last error: $($_.Exception.Message)" }
-      Write-Host "[WARN] Subnet $SubnetName not ready (attempt $i/5); ensuring creation..." -ForegroundColor Yellow
-      Invoke-AzCli -Args @('network','vnet','subnet','create','-g',$rg,'--vnet-name',$hubVnet,'-n',$SubnetName,'--address-prefixes',$Prefix,'-o','none') | Out-Null
+      if ($i -eq 7) { throw "Subnet $SubnetName (prefix $Prefix) not ready after retries. Last error: $($_.Exception.Message)" }
+      Write-Host "[WARN] Subnet $SubnetName not ready (attempt $i/7); ensuring creation..." -ForegroundColor Yellow
+      try {
+        Invoke-AzCli -Args @('network','vnet','subnet','create','-g',$rg,'--vnet-name',$hubVnet,'-n',$SubnetName,'--address-prefixes',$Prefix,'-o','none') | Out-Null
+      } catch {
+        Write-Host "[WARN] subnet create attempt failed: $($_.Exception.Message)" -ForegroundColor Yellow
+      }
       Start-Sleep -Seconds 5
     }
   }
@@ -245,6 +249,7 @@ Write-Host "[STAGE1] FortiGate NICs (ensure IP forwarding, attach PIP)" -Foregro
 try {
   Invoke-AzCli -Args @('network','nic','show','-g',$rg,'-n',$wanNic,'-o','none') | Out-Null
 } catch {
+  Ensure-SubnetReady -SubnetName $wanSubnetName -Prefix $wanSubnetPrefix
   Invoke-AzCli -Args @('network','nic','create','-g',$rg,'-n',$wanNic,'-l',$location,'--vnet-name',$hubVnet,'--subnet',$wanSubnetName,'--public-ip-address',$pipName,'--ip-forwarding','true','-o','none') | Out-Null
 }
 Invoke-AzCli -Args @('network','nic','update','-g',$rg,'-n',$wanNic,'--ip-forwarding','true','-o','none') | Out-Null
@@ -254,6 +259,7 @@ Invoke-AzCli -Args @('network','nic','ip-config','update','-g',$rg,'--nic-name',
 try {
   Invoke-AzCli -Args @('network','nic','show','-g',$rg,'-n',$lanNic,'-o','none') | Out-Null
 } catch {
+  Ensure-SubnetReady -SubnetName $lanSubnetUsedName -Prefix $lanSubnetPrefix
   Invoke-AzCli -Args @('network','nic','create','-g',$rg,'-n',$lanNic,'-l',$location,'--vnet-name',$hubVnet,'--subnet',$lanSubnetUsedName,'--private-ip-address',$fgtLanIpTarget,'--ip-forwarding','true','-o','none') | Out-Null
 }
 Invoke-AzCli -Args @('network','nic','update','-g',$rg,'-n',$lanNic,'--ip-forwarding','true','-o','none') | Out-Null
