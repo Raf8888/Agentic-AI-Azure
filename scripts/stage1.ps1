@@ -213,11 +213,22 @@ $lanIpCfg = Invoke-AzCli -Args @('network','nic','show','-g',$rg,'-n',$lanNic,'-
 Invoke-AzCli -Args @('network','nic','ip-config','update','-g',$rg,'--nic-name',$lanNic,'-n',$lanIpCfg,'--private-ip-address',$fgtLanIpTarget,'-o','none') | Out-Null
 
 $fgtLanIp = Invoke-AzCli -Args @('network','nic','show','-g',$rg,'-n',$lanNic,'--query','ipConfigurations[0].privateIpAddress','-o','tsv')
+if ([string]::IsNullOrWhiteSpace($fgtLanIp)) {
+  Write-Host "[WARN] FortiGate LAN IP not yet populated; retrying NIC read..." -ForegroundColor Yellow
+  Start-Sleep -Seconds 5
+  $fgtLanIp = Invoke-AzCli -Args @('network','nic','show','-g',$rg,'-n',$lanNic,'--query','ipConfigurations[0].privateIpAddress','-o','tsv')
+}
+if ([string]::IsNullOrWhiteSpace($fgtLanIp)) {
+  throw "FortiGate LAN IP could not be determined from NIC $lanNic (subnet $lanSubnetUsedName). Check NIC/subnet creation."
+}
 
 if ($fgtLanIp -ne $fgtLanIpTarget) {
   Write-Host "[WARN] FortiGate LAN IP in use: $fgtLanIp (target was $fgtLanIpTarget, subnet is $lanSubnetPrefix)" -ForegroundColor Yellow
   Ensure-NsgRule -ResourceGroup $rg -NsgName $lanNsg -RuleName 'Allow-FGT-LAN-In' -Priority 110 -Direction Inbound -Access Allow -Protocol '*' -Source $fgtLanIp -DestPorts '*'
 } else {
+  if ([string]::IsNullOrWhiteSpace($fgtLanIp)) {
+    throw "FortiGate LAN IP could not be determined from NIC $lanNic (subnet $lanSubnetUsedName). Check NIC/subnet creation."
+  }
   Ensure-NsgRule -ResourceGroup $rg -NsgName $lanNsg -RuleName 'Allow-FGT-LAN-In' -Priority 110 -Direction Inbound -Access Allow -Protocol '*' -Source $fgtLanIp -DestPorts '*'
 }
 
