@@ -274,7 +274,7 @@ try {
 }
 Invoke-AzCli -Args @('network','nic','update','-g',$rg,'-n',$lanNic,'--ip-forwarding','true','-o','none') | Out-Null
 $lanIpCfg = Invoke-AzCli -Args @('network','nic','show','-g',$rg,'-n',$lanNic,'--query','ipConfigurations[0].name','-o','tsv')
-Invoke-AzCli -Args @('network','nic','ip-config','update','-g',$rg,'--nic-name',$lanNic,'-n',$lanIpCfg,'--private-ip-address',$fgtLanIpTarget,'-o','none') | Out-Null
+Invoke-AzCli -Args @('network','nic','ip-config','update','-g',$rg,'--nic-name',$lanNic,'-n',$lanIpCfg,'--private-ip-address',$fgtLanIpTarget,'--subnet',$lanSubnetUsedName,'-o','none') | Out-Null
 
 $fgtLanIp = Invoke-AzCli -Args @('network','nic','show','-g',$rg,'-n',$lanNic,'--query','ipConfigurations[0].privateIpAddress','-o','tsv')
 if ([string]::IsNullOrWhiteSpace($fgtLanIp)) {
@@ -283,15 +283,13 @@ if ([string]::IsNullOrWhiteSpace($fgtLanIp)) {
   $fgtLanIp = Invoke-AzCli -Args @('network','nic','show','-g',$rg,'-n',$lanNic,'--query','ipConfigurations[0].privateIpAddress','-o','tsv')
 }
 if ([string]::IsNullOrWhiteSpace($fgtLanIp)) {
-  # If still empty, force-refresh NIC by re-reading subnet and updating IP config once more
-  Write-Host "[WARN] FortiGate LAN IP still empty; refreshing NIC IP config..." -ForegroundColor Yellow
-  $fgtLanIp = $fgtLanIpTarget
-  Invoke-AzCli -Args @('network','nic','ip-config','update','-g',$rg,'--nic-name',$lanNic,'-n',$lanIpCfg,'--private-ip-address',$fgtLanIp,'-o','none') | Out-Null
+  Write-Host "[WARN] FortiGate LAN IP still empty; forcing IP assignment on NIC $lanNic..." -ForegroundColor Yellow
+  Invoke-AzCli -Args @('network','nic','ip-config','update','-g',$rg,'--nic-name',$lanNic,'-n',$lanIpCfg,'--private-ip-address',$fgtLanIpTarget,'--subnet',$lanSubnetUsedName,'-o','none') | Out-Null
   Start-Sleep -Seconds 5
   $fgtLanIp = Invoke-AzCli -Args @('network','nic','show','-g',$rg,'-n',$lanNic,'--query','ipConfigurations[0].privateIpAddress','-o','tsv')
 }
 if ([string]::IsNullOrWhiteSpace($fgtLanIp)) {
-  throw "FortiGate LAN IP could not be determined from NIC $lanNic (subnet $lanSubnetUsedName). Check NIC/subnet creation."
+  throw "FortiGate LAN IP could not be determined from NIC $lanNic (subnet $lanSubnetUsedName)."
 }
 
 if ($fgtLanIp -ne $fgtLanIpTarget) {
