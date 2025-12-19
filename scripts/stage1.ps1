@@ -68,6 +68,13 @@ try {
 Write-Host "[STAGE1] Subnets (overlap-safe)" -ForegroundColor Cyan
 $existingSubnets = Get-HubSubnets -ResourceGroup $rg -VnetName $hubVnet
 
+function Get-SubnetId {
+  param([Parameter(Mandatory)] [string] $SubnetName)
+  $subId = Invoke-AzCli -Args @('network','vnet','subnet','show','-g',$rg,'--vnet-name',$hubVnet,'-n',$SubnetName,'--query','id','-o','tsv')
+  return $subId
+}
+
+
 function Ensure-SubnetReady {
   param(
     [Parameter(Mandatory)] [string] $SubnetName,
@@ -285,7 +292,7 @@ try {
 }
 Invoke-AzCli -Args @('network','nic','update','-g',$rg,'-n',$lanNic,'--ip-forwarding','true','-o','none') | Out-Null
 $lanIpCfg = Invoke-AzCli -Args @('network','nic','show','-g',$rg,'-n',$lanNic,'--query','ipConfigurations[0].name','-o','tsv')
-Invoke-AzCli -Args @('network','nic','ip-config','update','-g',$rg,'--nic-name',$lanNic,'-n',$lanIpCfg,'--private-ip-address',$fgtLanIpTarget,'--vnet-name',$hubVnet,'--subnet',$lanSubnetUsedName,'-o','none') | Out-Null
+Invoke-AzCli -Args @('network','nic','ip-config','update','-g',$rg,'--nic-name',$lanNic,'-n',$lanIpCfg,'--private-ip-address',$fgtLanIpTarget,'--vnet-name',$hubVnet,'--subnet',$lanSubnetUsedName,'--private-ip-allocation-method','Static','-o','none') | Out-Null
 
 $fgtLanIp = Invoke-AzCli -Args @('network','nic','show','-g',$rg,'-n',$lanNic,'--query','ipConfigurations[0].privateIpAddress','-o','tsv')
 if ([string]::IsNullOrWhiteSpace($fgtLanIp)) {
