@@ -264,7 +264,7 @@ try {
 }
 Invoke-AzCli -Args @('network','nic','update','-g',$rg,'-n',$wanNic,'--ip-forwarding','true','-o','none') | Out-Null
 $wanIpCfg = Invoke-AzCli -Args @('network','nic','show','-g',$rg,'-n',$wanNic,'--query','ipConfigurations[0].name','-o','tsv')
-Invoke-AzCli -Args @('network','nic','ip-config','update','-g',$rg,'--nic-name',$wanNic,'-n',$wanIpCfg,'--public-ip-address',$pipName,'-o','none') | Out-Null
+Invoke-AzCli -Args @('network','nic','ip-config','update','-g',$rg,'--nic-name',$wanNic,'-n',$wanIpCfg,'--public-ip-address',$pipName,'--vnet-name',$hubVnet,'--subnet',$wanSubnetName,'-o','none') | Out-Null
 
 try {
   Invoke-AzCli -Args @('network','nic','show','-g',$rg,'-n',$lanNic,'-o','none') | Out-Null
@@ -274,7 +274,7 @@ try {
 }
 Invoke-AzCli -Args @('network','nic','update','-g',$rg,'-n',$lanNic,'--ip-forwarding','true','-o','none') | Out-Null
 $lanIpCfg = Invoke-AzCli -Args @('network','nic','show','-g',$rg,'-n',$lanNic,'--query','ipConfigurations[0].name','-o','tsv')
-Invoke-AzCli -Args @('network','nic','ip-config','update','-g',$rg,'--nic-name',$lanNic,'-n',$lanIpCfg,'--private-ip-address',$fgtLanIpTarget,'--subnet',$lanSubnetUsedName,'-o','none') | Out-Null
+Invoke-AzCli -Args @('network','nic','ip-config','update','-g',$rg,'--nic-name',$lanNic,'-n',$lanIpCfg,'--private-ip-address',$fgtLanIpTarget,'--vnet-name',$hubVnet,'--subnet',$lanSubnetUsedName,'-o','none') | Out-Null
 
 $fgtLanIp = Invoke-AzCli -Args @('network','nic','show','-g',$rg,'-n',$lanNic,'--query','ipConfigurations[0].privateIpAddress','-o','tsv')
 if ([string]::IsNullOrWhiteSpace($fgtLanIp)) {
@@ -284,7 +284,7 @@ if ([string]::IsNullOrWhiteSpace($fgtLanIp)) {
 }
 if ([string]::IsNullOrWhiteSpace($fgtLanIp)) {
   Write-Host "[WARN] FortiGate LAN IP still empty; forcing IP assignment on NIC $lanNic..." -ForegroundColor Yellow
-  Invoke-AzCli -Args @('network','nic','ip-config','update','-g',$rg,'--nic-name',$lanNic,'-n',$lanIpCfg,'--private-ip-address',$fgtLanIpTarget,'--subnet',$lanSubnetUsedName,'-o','none') | Out-Null
+  Invoke-AzCli -Args @('network','nic','ip-config','update','-g',$rg,'--nic-name',$lanNic,'-n',$lanIpCfg,'--private-ip-address',$fgtLanIpTarget,'--vnet-name',$hubVnet,'--subnet',$lanSubnetUsedName,'-o','none') | Out-Null
   Start-Sleep -Seconds 5
   $fgtLanIp = Invoke-AzCli -Args @('network','nic','show','-g',$rg,'-n',$lanNic,'--query','ipConfigurations[0].privateIpAddress','-o','tsv')
 }
