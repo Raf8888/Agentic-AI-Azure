@@ -193,7 +193,18 @@ if ($null -ne $lanSubnetFromNic) {
     }
   }
 }
-Ensure-SubnetReady -SubnetName $lanSubnetUsedName -Prefix $lanSubnetPrefix
+$lanEnsureDone = $false
+try {
+  Ensure-SubnetReady -SubnetName $lanSubnetUsedName -Prefix $lanSubnetPrefix
+  $lanEnsureDone = $true
+} catch {
+  Write-Host "[WARN] Ensure-SubnetReady failed for $lanSubnetUsedName/$lanSubnetPrefix: $($_.Exception.Message). Selecting next available /24..." -ForegroundColor Yellow
+  $existingSubnets = Get-HubSubnets -ResourceGroup $rg -VnetName $hubVnet
+  $lanSubnetUsedName = $lanSubnetName
+  $lanSubnetPrefix = Get-NextAvailable24 -ExistingSubnets $existingSubnets -StartCidr $lanStart -MaxThirdOctet $lanMax
+  Ensure-SubnetReady -SubnetName $lanSubnetUsedName -Prefix $lanSubnetPrefix
+  $lanEnsureDone = $true
+}
 # Allow for ARM propagation before NIC creation
 for ($i=1; $i -le 3; $i++) {
   try {
