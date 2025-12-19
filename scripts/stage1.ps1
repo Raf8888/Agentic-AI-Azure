@@ -175,7 +175,9 @@ if ($null -ne $lanSubnetFromNic) {
   $lanSubnetUsedName = $lanSubnetFromNic.Name
   $lanSubnetPrefix = $lanSubnetFromNic.Prefix
   if ($lanSubnetPrefix -ne $lanStart) {
-    Write-Host "[WARN] LAN NIC $lanNic already attached to subnet $lanSubnetUsedName with prefix $lanSubnetPrefix; overriding desired prefix." -ForegroundColor Yellow
+    Write-Host "[WARN] LAN NIC $lanNic already attached to subnet $lanSubnetUsedName with prefix $lanSubnetPrefix; switching to configured LAN subnet $lanSubnetName ($lanStart)." -ForegroundColor Yellow
+    $lanSubnetUsedName = $lanSubnetName
+    $lanSubnetPrefix = $lanStart
   }
 } else {
   $existingLanByName = $null
