@@ -284,7 +284,17 @@ if ([string]::IsNullOrWhiteSpace($fgtLanIp)) {
 }
 if ([string]::IsNullOrWhiteSpace($fgtLanIp)) {
   Write-Host "[WARN] FortiGate LAN IP still empty; forcing IP assignment on NIC $lanNic..." -ForegroundColor Yellow
-  Invoke-AzCli -Args @('network','nic','ip-config','update','-g',$rg,'--nic-name',$lanNic,'-n',$lanIpCfg,'--private-ip-address',$fgtLanIpTarget,'--vnet-name',$hubVnet,'--subnet',$lanSubnetUsedName,'-o','none') | Out-Null
+  # Explicitly set subnet ID and static allocation to avoid empty IPs
+  $subId = Invoke-AzCli -Args @('account','show','--query','id','-o','tsv')
+  $lanSubnetId = "/subscriptions/$subId/resourceGroups/$rg/providers/Microsoft.Network/virtualNetworks/$hubVnet/subnets/$lanSubnetUsedName"
+  Invoke-AzCli -Args @(
+    'network','nic','update',
+    '-g',$rg,
+    '-n',$lanNic,
+    '--set',"ipConfigurations[0].subnet.id=$lanSubnetId",
+           "ipConfigurations[0].privateIpAllocationMethod=Static",
+           "ipConfigurations[0].privateIpAddress=$fgtLanIpTarget"
+  ) | Out-Null
   Start-Sleep -Seconds 5
   $fgtLanIp = Invoke-AzCli -Args @('network','nic','show','-g',$rg,'-n',$lanNic,'--query','ipConfigurations[0].privateIpAddress','-o','tsv')
 }
