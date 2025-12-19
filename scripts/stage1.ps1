@@ -278,7 +278,7 @@ Invoke-AzCli -Args @('network','nic','ip-config','update','-g',$rg,'--nic-name',
 
 $fgtLanIp = Invoke-AzCli -Args @('network','nic','show','-g',$rg,'-n',$lanNic,'--query','ipConfigurations[0].privateIpAddress','-o','tsv')
 if ([string]::IsNullOrWhiteSpace($fgtLanIp)) {
-  Write-Host "[WARN] FortiGate LAN IP not yet populated; retrying NIC read..." -ForegroundColor Yellow
+  Write-Host "[WARN] FortiGate LAN IP not yet populated; retrying NIC read (ipconfig=$lanIpCfg, subnet=$lanSubnetUsedName)..." -ForegroundColor Yellow
   Start-Sleep -Seconds 5
   $fgtLanIp = Invoke-AzCli -Args @('network','nic','show','-g',$rg,'-n',$lanNic,'--query','ipConfigurations[0].privateIpAddress','-o','tsv')
 }
@@ -299,7 +299,8 @@ if ([string]::IsNullOrWhiteSpace($fgtLanIp)) {
   $fgtLanIp = Invoke-AzCli -Args @('network','nic','show','-g',$rg,'-n',$lanNic,'--query','ipConfigurations[0].privateIpAddress','-o','tsv')
 }
 if ([string]::IsNullOrWhiteSpace($fgtLanIp)) {
-  throw "FortiGate LAN IP could not be determined from NIC $lanNic (subnet $lanSubnetUsedName)."
+  Write-Host "[WARN] FortiGate LAN IP still empty after force-assign; proceeding with target IP $fgtLanIpTarget" -ForegroundColor Yellow
+  $fgtLanIp = $fgtLanIpTarget
 }
 
 if ($fgtLanIp -ne $fgtLanIpTarget) {
