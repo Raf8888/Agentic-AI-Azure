@@ -207,7 +207,7 @@ try {
   Ensure-SubnetReady -SubnetName $lanSubnetUsedName -Prefix $lanSubnetPrefix
   $lanEnsureDone = $true
 } catch {
-  Write-Host "[WARN] Ensure-SubnetReady failed for $lanSubnetUsedName/$lanSubnetPrefix: $($_.Exception.Message). Selecting next available /24..." -ForegroundColor Yellow
+  Write-Host ("[WARN] Ensure-SubnetReady failed for {0}/{1}: {2}. Selecting next available /24..." -f $lanSubnetUsedName, $lanSubnetPrefix, $_.Exception.Message) -ForegroundColor Yellow
   $existingSubnets = Get-HubSubnets -ResourceGroup $rg -VnetName $hubVnet
   $lanSubnetUsedName = $lanSubnetName
   $lanSubnetPrefix = Get-NextAvailable24 -ExistingSubnets $existingSubnets -StartCidr $lanStart -MaxThirdOctet $lanMax
