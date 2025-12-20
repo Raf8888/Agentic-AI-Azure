@@ -10,7 +10,7 @@
     },
     "lanSubnet": {
       "name": "snet-fw-lan",
-      "prefixStart": "10.100.10.0/24",
+      "prefixStart": "10.100.1.0/24",
       "prefixMaxOctet": 250
     }
   },
@@ -34,7 +34,7 @@
     "vmName": "vm-fgt-hub",
     "wanNicName": "nic-fgt-wan",
     "lanNicName": "nic-fgt-lan",
-    "lanIp": "10.100.10.4",
+    "lanIp": "10.100.1.4",
     "pipName": "pip-fgt-hub",
     "wanNsgName": "nsg-fgt-wan",
     "lanNsgName": "nsg-fgt-lan",

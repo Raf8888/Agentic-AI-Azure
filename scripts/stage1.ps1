@@ -175,9 +175,8 @@ if ($null -ne $lanSubnetFromNic) {
   $lanSubnetUsedName = $lanSubnetFromNic.Name
   $lanSubnetPrefix = $lanSubnetFromNic.Prefix
   if ($lanSubnetPrefix -ne $lanStart) {
-    Write-Host "[WARN] LAN NIC $lanNic already attached to subnet $lanSubnetUsedName with prefix $lanSubnetPrefix; switching to configured LAN subnet $lanSubnetName ($lanStart)." -ForegroundColor Yellow
-    $lanSubnetUsedName = $lanSubnetName
-    $lanSubnetPrefix = $lanStart
+    Write-Host "[WARN] LAN NIC $lanNic already attached to subnet $lanSubnetUsedName with prefix $lanSubnetPrefix; reusing existing subnet/prefix instead of switching." -ForegroundColor Yellow
+    # Use the existing prefix and subnet to avoid conflicts with active allocations.
   }
 } else {
   $existingLanByName = $null
@@ -207,12 +206,18 @@ try {
   Ensure-SubnetReady -SubnetName $lanSubnetUsedName -Prefix $lanSubnetPrefix
   $lanEnsureDone = $true
 } catch {
-  Write-Host ("[WARN] Ensure-SubnetReady failed for {0}/{1}: {2}. Selecting next available /24..." -f $lanSubnetUsedName, $lanSubnetPrefix, $_.Exception.Message) -ForegroundColor Yellow
-  $existingSubnets = Get-HubSubnets -ResourceGroup $rg -VnetName $hubVnet
-  $lanSubnetUsedName = $lanSubnetName
-  $lanSubnetPrefix = Get-NextAvailable24 -ExistingSubnets $existingSubnets -StartCidr $lanStart -MaxThirdOctet $lanMax
-  Ensure-SubnetReady -SubnetName $lanSubnetUsedName -Prefix $lanSubnetPrefix
-  $lanEnsureDone = $true
+  Write-Host ("[WARN] Ensure-SubnetReady failed for {0}/{1}: {2}. Will reuse existing subnet if present instead of changing prefix." -f $lanSubnetUsedName, $lanSubnetPrefix, $_.Exception.Message) -ForegroundColor Yellow
+  try {
+    $existingLanByName = Invoke-AzCli -Args @('network','vnet','subnet','show','-g',$rg,'--vnet-name',$hubVnet,'-n',$lanSubnetUsedName,'-o','json') -Json
+    if ($null -ne $existingLanByName) {
+      $lanPrefixes = Get-SubnetAddressPrefixes -SubnetObj $existingLanByName
+      $lanSubnetPrefix = ($lanPrefixes | Select-Object -First 1)
+      Write-Host ("[INFO] Reusing existing LAN subnet {0} with prefix {1}" -f $lanSubnetUsedName, $lanSubnetPrefix) -ForegroundColor Cyan
+      $lanEnsureDone = $true
+    }
+  } catch {
+    throw
+  }
 }
 # Allow for ARM propagation before NIC creation
 for ($i=1; $i -le 3; $i++) {
