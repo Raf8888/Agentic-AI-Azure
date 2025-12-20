@@ -38,6 +38,23 @@ jobs:
           name: lab-outputs
           path: out
 
+  apply_fw_config:
+    needs: [deploy_lab]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: Apply FortiGate config (interfaces + policies)
+        shell: pwsh
+        env:
+          FGT_LAB_CONFIG: ${{ secrets.FGT_LAB_CONFIG }}
+          MY_PUBLIC_IP_CIDR: ${{ secrets.MY_PUBLIC_IP_CIDR }}
+        run: ./scripts/fgt_apply_config.ps1
+
   self_heal:
     if: failure()
     continue-on-error: true
