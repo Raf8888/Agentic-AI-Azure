@@ -78,19 +78,28 @@ function Get-SubnetId {
 function Ensure-SubnetReady {
   param(
     [Parameter(Mandatory)] [string] $SubnetName,
-    [Parameter(Mandatory)] [string] $Prefix
+    [Parameter(Mandatory)] [string] $Prefix,
+    [switch] $AllowPrefixMismatch
   )
   for ($i=1; $i -le 5; $i++) {
     try {
       $check = Invoke-AzCli -Args @('network','vnet','subnet','show','-g',$rg,'--vnet-name',$hubVnet,'-n',$SubnetName,'-o','json') -Json
       $prefixes = Get-SubnetAddressPrefixes -SubnetObj $check
       if ($prefixes -contains $Prefix) { return }
+      if ($AllowPrefixMismatch) {
+        Write-Host ("[WARN] Subnet {0} exists with prefix {1}; reusing existing prefix instead of changing to {2}" -f $SubnetName, ($prefixes -join ','), $Prefix) -ForegroundColor Yellow
+        return
+      }
       throw "prefix mismatch. Expected=$Prefix Actual=$($prefixes -join ',')"
     } catch {
       # If not found, try to create once per loop
       try {
         Invoke-AzCli -Args @('network','vnet','subnet','create','-g',$rg,'--vnet-name',$hubVnet,'-n',$SubnetName,'--address-prefixes',$Prefix,'-o','none') | Out-Null
       } catch {
+        if ($AllowPrefixMismatch -and $_.Exception.Message -match 'InUsePrefixCannotBeDeleted') {
+          Write-Host ("[WARN] Subnet {0} has active allocations; keeping existing prefix. Skipping create." -f $SubnetName) -ForegroundColor Yellow
+          return
+        }
         Write-Host "[WARN] subnet create attempt failed: $($_.Exception.Message)" -ForegroundColor Yellow
       }
       if ($i -eq 5) { throw "Subnet $SubnetName (prefix $Prefix) not ready after retries. Last error: $($_.Exception.Message)" }
@@ -203,7 +212,7 @@ if ($null -ne $lanSubnetFromNic) {
 }
 $lanEnsureDone = $false
 try {
-  Ensure-SubnetReady -SubnetName $lanSubnetUsedName -Prefix $lanSubnetPrefix
+  Ensure-SubnetReady -SubnetName $lanSubnetUsedName -Prefix $lanSubnetPrefix -AllowPrefixMismatch
   $lanEnsureDone = $true
 } catch {
   Write-Host ("[WARN] Ensure-SubnetReady failed for {0}/{1}: {2}. Will reuse existing subnet if present instead of changing prefix." -f $lanSubnetUsedName, $lanSubnetPrefix, $_.Exception.Message) -ForegroundColor Yellow
