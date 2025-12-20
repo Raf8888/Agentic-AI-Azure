@@ -34,6 +34,7 @@ $spokeNicId = $stage2.spokeVm.nicId
 
 $fgtFqdn = $stage1.fortigate.fqdn
 $fgtPublicIp = $stage1.fortigate.publicIp
+$fgtVmName = $stage1.fortigate.vmName
 
 Write-Host "[STAGE3] Private DNS zone + links" -ForegroundColor Cyan
 try {
@@ -180,6 +181,46 @@ config firewall policy
     next
 end
 "@ | Set-Content -LiteralPath $cfgPath -Encoding ASCII
+
+Write-Host "[STAGE3] Enforce admin credentials and mgmt access (RunCommand)" -ForegroundColor Cyan
+$breakUser = 'breakglass'
+$breakPass = $secret.breakglassPassword
+if ([string]::IsNullOrWhiteSpace($breakPass)) { $breakPass = 'Temp!2345Strong' }
+
+$resetScript = @"
+set -e
+cat >/tmp/reset.fgt <<'EOF'
+config system interface
+    edit "port1"
+        set allowaccess ping https ssh
+    next
+    edit "port2"
+        set allowaccess ping https ssh
+    next
+end
+config system admin
+    edit "admin"
+        set password $adminPass
+    next
+    edit "$breakUser"
+        set accprofile "super_admin"
+        set password $breakPass
+    next
+end
+end
+EOF
+/opt/fortinet/fortimanager/bin/cli -f /tmp/reset.fgt
+rc=$?
+echo "CLI exit code: ${rc}"
+exit $rc
+"@
+
+Invoke-AzCli -Args @(
+  'vm','run-command','invoke',
+  '-g',$rg,'-n',$fgtVmName,
+  '--command-id','RunShellScript',
+  '--scripts',$resetScript
+) | Out-Null
 
 Write-Host "[STAGE3] Optional: push config to FortiGate (best-effort)" -ForegroundColor Cyan
 $pushResult = $null
