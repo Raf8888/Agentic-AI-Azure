@@ -142,7 +142,7 @@ if ([string]::IsNullOrWhiteSpace($adminPass)) { $adminPass = 'FortiGate@12345' }
 # FortiGate minimal base config (Azure hub-spoke)
 
 config system admin
-    edit "admin"
+    edit "$adminUser"
         set password $adminPass
     next
 end
@@ -202,7 +202,7 @@ config system interface
     next
 end
 config system admin
-    edit "admin"
+    edit "__ADMIN_USER__"
         set password __ADMIN_PASS__
     next
     edit "__BREAK_USER__"
@@ -219,6 +219,7 @@ exit $rc
 '@
 
 $resetScript = $resetScriptTemplate `
+  -replace '__ADMIN_USER__', $adminUser `
   -replace '__ADMIN_PASS__', $adminPass `
   -replace '__BREAK_USER__', $breakUser `
   -replace '__BREAK_PASS__', $breakPass
