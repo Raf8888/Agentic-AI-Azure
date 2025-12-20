@@ -62,24 +62,13 @@ function Ensure-ARecordExact {
     [Parameter(Mandatory)] [string] $Name,
     [Parameter(Mandatory)] [string] $Ip
   )
+  # Hard reset: delete the record set if present, then recreate with a single IP.
   try {
     Invoke-AzCli -Args @('network','private-dns','record-set','a','show','-g',$rg,'-z',$zone,'-n',$Name,'-o','none') | Out-Null
-  } catch {
-    Invoke-AzCli -Args @('network','private-dns','record-set','a','create','-g',$rg,'-z',$zone,'-n',$Name,'-o','none') | Out-Null
-  }
+    Invoke-AzCli -Args @('network','private-dns','record-set','a','delete','-g',$rg,'-z',$zone,'-n',$Name,'-y','-o','none') | Out-Null
+  } catch { }
 
-  $existingIps = @()
-  try {
-    $existingIps = Invoke-AzCli -Args @('network','private-dns','record-set','a','show','-g',$rg,'-z',$zone,'-n',$Name,'--query','arecords[].ipv4Address','-o','tsv')
-    $existingIps = @($existingIps -split "\s+" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-  } catch { $existingIps = @() }
-
-  if (($existingIps.Count -eq 1) -and ($existingIps[0] -eq $Ip)) { return }
-
-  # Remove all existing A records to avoid duplicate IP errors, then add the desired IP once.
-  foreach ($old in $existingIps) {
-    try { Invoke-AzCli -Args @('network','private-dns','record-set','a','remove-record','-g',$rg,'-z',$zone,'-n',$Name,'-a',$old,'-o','none') | Out-Null } catch {}
-  }
+  Invoke-AzCli -Args @('network','private-dns','record-set','a','create','-g',$rg,'-z',$zone,'-n',$Name,'-o','none') | Out-Null
   Invoke-AzCli -Args @('network','private-dns','record-set','a','add-record','-g',$rg,'-z',$zone,'-n',$Name,'-a',$Ip,'-o','none') | Out-Null
 }
 
