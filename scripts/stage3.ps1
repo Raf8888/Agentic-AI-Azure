@@ -190,7 +190,7 @@ if ($secret -and $secret.PSObject.Properties.Name -contains 'breakglassPassword'
 }
 if ([string]::IsNullOrWhiteSpace($breakPass)) { $breakPass = 'Temp!2345Strong' }
 
-$resetScript = @"
+$resetScriptTemplate = @'
 set -e
 cat >/tmp/reset.fgt <<'EOF'
 config system interface
@@ -203,20 +203,25 @@ config system interface
 end
 config system admin
     edit "admin"
-        set password $adminPass
+        set password __ADMIN_PASS__
     next
-    edit "$breakUser"
+    edit "__BREAK_USER__"
         set accprofile "super_admin"
-        set password $breakPass
+        set password __BREAK_PASS__
     next
 end
 end
 EOF
 /opt/fortinet/fortimanager/bin/cli -f /tmp/reset.fgt
-rc=``$?
-echo "CLI exit code: ``$rc"
-exit ``$rc
-"@
+rc=$?
+echo "CLI exit code: $rc"
+exit $rc
+'@
+
+$resetScript = $resetScriptTemplate `
+  -replace '__ADMIN_PASS__', $adminPass `
+  -replace '__BREAK_USER__', $breakUser `
+  -replace '__BREAK_PASS__', $breakPass
 
 Invoke-AzCli -Args @(
   'vm','run-command','invoke',
