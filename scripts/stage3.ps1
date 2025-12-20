@@ -76,15 +76,11 @@ function Ensure-ARecordExact {
 
   if (($existingIps.Count -eq 1) -and ($existingIps[0] -eq $Ip)) { return }
 
-  # Remove only extra IPs that differ; keep the existing matching IP to avoid duplicate add errors
+  # Remove all existing A records to avoid duplicate IP errors, then add the desired IP once.
   foreach ($old in $existingIps) {
-    if ($old -eq $Ip) { continue }
     try { Invoke-AzCli -Args @('network','private-dns','record-set','a','remove-record','-g',$rg,'-z',$zone,'-n',$Name,'-a',$old,'-o','none') | Out-Null } catch {}
   }
-  # Add record if not present
-  if (-not ($existingIps -contains $Ip)) {
-    Invoke-AzCli -Args @('network','private-dns','record-set','a','add-record','-g',$rg,'-z',$zone,'-n',$Name,'-a',$Ip,'-o','none') | Out-Null
-  }
+  Invoke-AzCli -Args @('network','private-dns','record-set','a','add-record','-g',$rg,'-z',$zone,'-n',$Name,'-a',$Ip,'-o','none') | Out-Null
 }
 
 Ensure-ARecordExact -Name $fgtRecord -Ip $fgtLanIp
