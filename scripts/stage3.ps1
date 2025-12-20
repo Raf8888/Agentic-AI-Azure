@@ -213,8 +213,8 @@ end
 end
 EOF
 /opt/fortinet/fortimanager/bin/cli -f /tmp/reset.fgt
-rc=$?
-echo "CLI exit code: ${rc}"
+rc=`$?
+echo "CLI exit code: `$rc"
 exit $rc
 "@
 
