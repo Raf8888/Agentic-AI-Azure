@@ -44,6 +44,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Download outputs artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: lab-outputs
+          path: out
       - name: Azure login
         uses: azure/login@v2
         with:
