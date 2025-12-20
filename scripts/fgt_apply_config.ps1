@@ -26,11 +26,13 @@ $fgtFqdn = $stage1.fortigate.fqdn
 $lanPrefix = $stage1.hubVnet.lanSubnet.prefix
 $wanPrefix = $lab.hub.wanSubnet.prefix
 $spokeSubnet = $stage2.spokeVnet.subnet.prefix
+$wanNsg = $lab.fortigate.wanNsgName
 
 $adminUser = $secret.fgtAdminUsername
 $adminPass = $secret.fgtAdminPassword
 if ([string]::IsNullOrWhiteSpace($adminUser)) { $adminUser = 'fortiadmin' }
 if ([string]::IsNullOrWhiteSpace($adminPass)) { $adminPass = 'Welcome12345' }
+if ([string]::IsNullOrWhiteSpace($myCidr)) { $myCidr = '0.0.0.0/0' }
 
 function Get-SubnetMaskFromCidr {
   param([Parameter(Mandatory)] [string] $Cidr)
@@ -55,6 +57,13 @@ $lanMask = Get-SubnetMaskFromCidr -Cidr $lanPrefix
 $wanGateway = Get-GatewayFromCidr -Cidr $wanPrefix
 
 $cfgPath = Join-Path $outDir 'fortigate-fw-config.txt'
+
+# Ensure IPsec ports allowed on WAN NSG
+Write-Host "[FW-CONFIG] Ensuring NSG rules for IPsec (UDP 500/4500)" -ForegroundColor Cyan
+Invoke-AzCli -Args @('network','nsg','rule','create','-g',$rg,'--nsg-name',$wanNsg,'-n','Allow-IPsec-500','--priority','130','--direction','Inbound','--access','Allow','--protocol','Udp','--source-address-prefixes','*','--destination-port-ranges','500','-o','none') | Out-Null
+Invoke-AzCli -Args @('network','nsg','rule','create','-g',$rg,'--nsg-name',$wanNsg,'-n','Allow-IPsec-4500','--priority','131','--direction','Inbound','--access','Allow','--protocol','Udp','--source-address-prefixes','*','--destination-port-ranges','4500','-o','none') | Out-Null
+
+Write-Host "[FW-CONFIG] Rendering FortiGate CLI" -ForegroundColor Cyan
 
 @"
 # FortiGate interface + policy configuration (apply-only)
@@ -116,6 +125,73 @@ config firewall policy
         set schedule "always"
         set service "HTTPS" "HTTP" "SSH"
         set nat disable
+    next
+end
+
+# IPsec dial-up for FortiClient (IKEv1 aggressive + XAuth)
+config user local
+    edit "$adminUser"
+        set type password
+        set passwd "$adminPass"
+    next
+end
+config user group
+    edit "fc-group"
+        set member "$adminUser"
+    next
+end
+
+config vpn ipsec phase1-interface
+    edit "dialup-fc"
+        set interface "port1"
+        set peertype any
+        set proposal aes256-sha256
+        set mode aggressive
+        set dhgrp 14
+        set xauthtype auto
+        set authusrgrp "fc-group"
+        set psksecret "$adminPass"
+        set mode-cfg enable
+        set ipv4-start-ip 10.250.250.10
+        set ipv4-end-ip 10.250.250.50
+        set ipv4-netmask 255.255.255.0
+        set ipv4-split-include "spoke-subnet"
+        set ipv4-dns-server1 8.8.8.8
+        set ipv4-dns-server2 1.1.1.1
+    next
+end
+
+config vpn ipsec phase2-interface
+    edit "dialup-fc-p2"
+        set phase1name "dialup-fc"
+        set proposal aes256-sha256
+        set dhgrp 14
+        set src-subnet 0.0.0.0 0.0.0.0
+        set dst-subnet 0.0.0.0 0.0.0.0
+    next
+end
+
+config firewall policy
+    edit 100
+        set name "FC-to-Spoke"
+        set srcintf "dialup-fc"
+        set dstintf "port2"
+        set srcaddr "all"
+        set dstaddr "spoke-subnet"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+    next
+    edit 101
+        set name "FC-to-Internet"
+        set srcintf "dialup-fc"
+        set dstintf "port1"
+        set srcaddr "all"
+        set dstaddr "all"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+        set nat enable
     next
 end
 "@ | Set-Content -LiteralPath $cfgPath -Encoding ASCII
