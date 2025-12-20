@@ -213,9 +213,9 @@ end
 end
 EOF
 /opt/fortinet/fortimanager/bin/cli -f /tmp/reset.fgt
-rc=`$?
-echo "CLI exit code: `$rc"
-exit $rc
+rc=``$?
+echo "CLI exit code: ``$rc"
+exit ``$rc
 "@
 
 Invoke-AzCli -Args @(
