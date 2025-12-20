@@ -184,7 +184,10 @@ end
 
 Write-Host "[STAGE3] Enforce admin credentials and mgmt access (RunCommand)" -ForegroundColor Cyan
 $breakUser = 'breakglass'
-$breakPass = $secret.breakglassPassword
+$breakPass = $null
+if ($secret -and $secret.PSObject.Properties.Name -contains 'breakglassPassword') {
+  $breakPass = $secret.breakglassPassword
+}
 if ([string]::IsNullOrWhiteSpace($breakPass)) { $breakPass = 'Temp!2345Strong' }
 
 $resetScript = @"
