@@ -53,6 +53,19 @@ function Get-GatewayFromCidr {
   return '10.100.0.1'
 }
 
+# Validate prefixes; fallback to lab config defaults if missing/invalid
+function Get-ValidCidr {
+  param([string] $Value, [string] $Fallback)
+  if (-not [string]::IsNullOrWhiteSpace($Value)) {
+    try { $null = Convert-CidrToRange -Cidr $Value; return $Value } catch {}
+  }
+  return $Fallback
+}
+
+$lanPrefix = Get-ValidCidr -Value $lanPrefix -Fallback $lab.hub.lanSubnet.prefixStart
+$wanPrefix = Get-ValidCidr -Value $wanPrefix -Fallback $lab.hub.wanSubnet.prefix
+$spokeSubnet = Get-ValidCidr -Value $spokeSubnet -Fallback $lab.spoke.subnet.prefix
+
 $lanMask = Get-SubnetMaskFromCidr -Cidr $lanPrefix
 $wanGateway = Get-GatewayFromCidr -Cidr $wanPrefix
 
