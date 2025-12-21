@@ -13,7 +13,7 @@ Test-AzLogin
 $lab = Read-JsonFile -Path $configPath
 $secretJson = Get-EnvOrDefault -Name 'FGT_LAB_CONFIG' -Default '{}'
 $secret = $secretJson | ConvertFrom-Json
-$myCidr = Get-EnvOrDefault -Name 'MY_PUBLIC_IP_CIDR' -Default '0.0.0.0/0'
+$myCidr = Get-EnvOrDefault -Name 'MY_PUBLIC_IP_CIDR' -Default '87.101.151.195/32'
 
 $stage1 = Read-JsonFile -Path (Join-Path $outDir 'stage1.outputs.json')
 $stage2 = Read-JsonFile -Path (Join-Path $outDir 'stage2.outputs.json')
@@ -32,7 +32,7 @@ $adminUser = $secret.fgtAdminUsername
 $adminPass = $secret.fgtAdminPassword
 if ([string]::IsNullOrWhiteSpace($adminUser)) { $adminUser = 'fortiadmin' }
 if ([string]::IsNullOrWhiteSpace($adminPass)) { $adminPass = 'Welcome12345' }
-if ([string]::IsNullOrWhiteSpace($myCidr)) { $myCidr = '0.0.0.0/0' }
+if ([string]::IsNullOrWhiteSpace($myCidr)) { $myCidr = '87.101.151.195/32' }
 
 function Get-SubnetMaskFromCidr {
   param([Parameter(Mandatory)] [string] $Cidr)
