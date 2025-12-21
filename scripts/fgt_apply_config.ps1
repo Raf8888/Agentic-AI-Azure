@@ -36,20 +36,25 @@ if ([string]::IsNullOrWhiteSpace($myCidr)) { $myCidr = '0.0.0.0/0' }
 
 function Get-SubnetMaskFromCidr {
   param([Parameter(Mandatory)] [string] $Cidr)
-  $parts = $Cidr.Split('/')
-  if ($parts.Count -ne 2) { return '255.255.255.0' }
-  $prefix = [int]$parts[1]
-  $maskInt = [uint32]0
-  if ($prefix -eq 0) { $maskInt = 0 }
-  else { $maskInt = [uint32]([uint32]0xFFFFFFFF -shl (32 - $prefix)) }
-  [System.Net.IPAddress]::new([bitconverter]::GetBytes([uint32]([System.Net.IPAddress]::HostToNetworkOrder([int]$maskInt)))).ToString()
+  try {
+    $parts = $Cidr.Split('/')
+    if ($parts.Count -ne 2) { return '255.255.255.0' }
+    $prefix = [int]$parts[1]
+    if ($prefix -lt 0 -or $prefix -gt 32) { return '255.255.255.0' }
+    $maskInt = [uint32]0
+    if ($prefix -eq 0) { $maskInt = 0 }
+    else { $maskInt = [uint32]([uint32]0xFFFFFFFF -shl (32 - $prefix)) }
+    return [System.Net.IPAddress]::new([bitconverter]::GetBytes([uint32]([System.Net.IPAddress]::HostToNetworkOrder([int]$maskInt)))).ToString()
+  } catch { return '255.255.255.0' }
 }
 
 function Get-GatewayFromCidr {
   param([Parameter(Mandatory)] [string] $Cidr)
-  $parts = $Cidr.Split('/')
-  $ipParts = $parts[0].Split('.')
-  if ($ipParts.Count -eq 4) { return "{0}.{1}.{2}.1" -f $ipParts[0],$ipParts[1],$ipParts[2] }
+  try {
+    $parts = $Cidr.Split('/')
+    $ipParts = $parts[0].Split('.')
+    if ($ipParts.Count -eq 4) { return "{0}.{1}.{2}.1" -f $ipParts[0],$ipParts[1],$ipParts[2] }
+  } catch {}
   return '10.100.0.1'
 }
 
@@ -62,9 +67,37 @@ function Get-ValidCidr {
   return $Fallback
 }
 
+function Resolve-SubnetPrefix {
+  param(
+    [string] $VnetName,
+    [string] $SubnetName,
+    [string] $Fallback
+  )
+  try {
+    $subnet = Invoke-AzCli -Args @('network','vnet','subnet','show','-g',$rg,'--vnet-name',$VnetName,'-n',$SubnetName,'-o','json') -Json
+    $prefixes = Get-SubnetAddressPrefixes -SubnetObj $subnet
+    if ($prefixes.Count -gt 0) { return $prefixes[0] }
+  } catch {}
+  return $Fallback
+}
+
+# Derive LAN prefix: prefer stage1 output, otherwise actual NIC subnet, otherwise config default
+if ([string]::IsNullOrWhiteSpace($lanPrefix)) {
+  try {
+    $lanNic = Invoke-AzCli -Args @('network','nic','show','-g',$rg,'-n',$lab.fortigate.lanNicName,'-o','json') -Json
+    $lanSubnetId = $lanNic.ipConfigurations[0].subnet.id
+    if (-not [string]::IsNullOrWhiteSpace($lanSubnetId)) {
+      $parts = $lanSubnetId -split '/'
+      $lanVnetName = $parts[$parts.Length-3]
+      $lanSubnetName = $parts[$parts.Length-1]
+      $lanPrefix = Resolve-SubnetPrefix -VnetName $lanVnetName -SubnetName $lanSubnetName -Fallback $lab.hub.lanSubnet.prefixStart
+    }
+  } catch {}
+}
+
 $lanPrefix = Get-ValidCidr -Value $lanPrefix -Fallback $lab.hub.lanSubnet.prefixStart
-$wanPrefix = Get-ValidCidr -Value $wanPrefix -Fallback $lab.hub.wanSubnet.prefix
-$spokeSubnet = Get-ValidCidr -Value $spokeSubnet -Fallback $lab.spoke.subnet.prefix
+$wanPrefix = Get-ValidCidr -Value $wanPrefix -Fallback (Resolve-SubnetPrefix -VnetName $lab.hub.vnetName -SubnetName $lab.hub.wanSubnet.name -Fallback $lab.hub.wanSubnet.prefix)
+$spokeSubnet = Get-ValidCidr -Value $spokeSubnet -Fallback (Resolve-SubnetPrefix -VnetName $lab.spoke.vnetName -SubnetName $lab.spoke.subnet.name -Fallback $lab.spoke.subnet.prefix)
 
 $lanMask = Get-SubnetMaskFromCidr -Cidr $lanPrefix
 $wanGateway = Get-GatewayFromCidr -Cidr $wanPrefix
