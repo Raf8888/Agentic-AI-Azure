@@ -104,10 +104,33 @@ $wanGateway = Get-GatewayFromCidr -Cidr $wanPrefix
 
 $cfgPath = Join-Path $outDir 'fortigate-fw-config.txt'
 
-# Ensure IPsec ports allowed on WAN NSG
+function Set-NsgRule {
+  param(
+    [string] $RuleName,
+    [string] $Priority,
+    [string] $Port
+  )
+  # Try update if exists, otherwise create
+  $exists = $false
+  try {
+    $null = Invoke-AzCli -Args @('network','nsg','rule','show','-g',$rg,'--nsg-name',$wanNsg,'-n',$RuleName,'-o','none')
+    $exists = $true
+  } catch { $exists = $false }
+
+  $args = @(
+    'network','nsg','rule',($exists ? 'update' : 'create'),
+    '-g',$rg,'--nsg-name',$wanNsg,'-n',$RuleName,
+    '--priority',$Priority,'--direction','Inbound','--access','Allow',
+    '--protocol','Udp','--source-address-prefixes','*','--destination-port-ranges',$Port,
+    '-o','none'
+  )
+  Invoke-AzCli -Args $args | Out-Null
+}
+
+# Ensure IPsec ports allowed on WAN NSG (use priorities that avoid existing HTTPS rule)
 Write-Host "[FW-CONFIG] Ensuring NSG rules for IPsec (UDP 500/4500)" -ForegroundColor Cyan
-Invoke-AzCli -Args @('network','nsg','rule','create','-g',$rg,'--nsg-name',$wanNsg,'-n','Allow-IPsec-500','--priority','130','--direction','Inbound','--access','Allow','--protocol','Udp','--source-address-prefixes','*','--destination-port-ranges','500','-o','none') | Out-Null
-Invoke-AzCli -Args @('network','nsg','rule','create','-g',$rg,'--nsg-name',$wanNsg,'-n','Allow-IPsec-4500','--priority','131','--direction','Inbound','--access','Allow','--protocol','Udp','--source-address-prefixes','*','--destination-port-ranges','4500','-o','none') | Out-Null
+Set-NsgRule -RuleName 'Allow-IPsec-500' -Priority '180' -Port '500'
+Set-NsgRule -RuleName 'Allow-IPsec-4500' -Priority '181' -Port '4500'
 
 Write-Host "[FW-CONFIG] Rendering FortiGate CLI" -ForegroundColor Cyan
 
